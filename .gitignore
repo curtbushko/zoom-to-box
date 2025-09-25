@@ -1,4 +1,5 @@
-# If you prefer the allow list template instead of the deny list, see community template:
+#
+jIf you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
@@ -34,5 +35,5 @@ go.work.sum
 # Custom for this repo
 /bin
 /temp
-zoom-to-box
+./zoom-to-box
 .claude/settings.local.json

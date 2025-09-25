@@ -15,7 +15,7 @@ default: help
 build: ## Build the binary
 	@mkdir -p $(CURDIR)/bin/$(OS)-$(ARCH)
 	@echo "$(DATELOG) Building binary"
-	GOOS=$(OS) GOARCH=$(ARCH) go build -o $(CURDIR)/bin/$(OS)-$(ARCH)/$(BINARY)
+	GOOS=$(OS) GOARCH=$(ARCH) go build -o $(CURDIR)/bin/$(OS)-$(ARCH)/$(BINARY) ./cmd/zoom-to-box
 	@chmod +x $(CURDIR)/bin/$(OS)-$(ARCH)/$(BINARY)
 
 .PHONY: run
