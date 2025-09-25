@@ -180,11 +180,11 @@ make test                     # Run all tests
 make vet                      # Run static analysis
 ```
 
-### Feature 1.4: Server-to-Server OAuth Authentication Client
-- [ ] Implement Server-to-Server OAuth authentication using account credentials
-- [ ] Handle JWT token generation and Bearer token authentication
-- [ ] Support account-level access for all users and recordings
-- [ ] Load authentication settings from YAML configuration
+### Feature 1.4: Server-to-Server OAuth Authentication Client ✅ COMPLETED
+- [x] Implement Server-to-Server OAuth authentication using account credentials
+- [x] Handle JWT token generation and Bearer token authentication
+- [x] Support account-level access for all users and recordings
+- [x] Load authentication settings from YAML configuration
 
 **Zoom Server-to-Server OAuth App:**
 - **Authentication Method**: Server-to-Server OAuth (not regular OAuth)
@@ -208,12 +208,42 @@ make vet                      # Run static analysis
 - **Recommended**: Server-to-Server for bulk recording downloads
 
 **Tests:**
-- [ ] Mock Server-to-Server OAuth token generation
-- [ ] Test JWT creation and Bearer token exchange
-- [ ] Verify proper header construction with Bearer tokens
-- [ ] Test error handling for invalid credentials
-- [ ] Test account-level scope validation
-- [ ] Verify automatic token refresh mechanisms
+- [x] Mock Server-to-Server OAuth token generation
+- [x] Test JWT creation and Bearer token exchange
+- [x] Verify proper header construction with Bearer tokens
+- [x] Test error handling for invalid credentials
+- [x] Test account-level scope validation
+- [x] Verify automatic token refresh mechanisms
+
+**Implementation Summary:**
+- ✅ Created `/internal/zoom/auth.go` with complete Server-to-Server OAuth implementation
+- ✅ Created comprehensive test suite in `/internal/zoom/auth_test.go`
+- ✅ JWT token generation using HMAC-SHA256 signing with proper claims
+- ✅ Automatic Bearer token exchange via `/oauth/token` endpoint
+- ✅ Token caching with automatic refresh (5-minute expiry buffer)
+- ✅ Thread-safe token management with read/write mutexes
+- ✅ Interface-driven design (Authenticator interface) for testability
+- ✅ AuthenticatedClient wrapper for automatic header injection
+- ✅ Comprehensive error handling with typed AuthError
+- ✅ Scope validation for required permissions
+- ✅ Integration with configuration system
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **JWT Generation**: Complete Server-to-Server OAuth flow with proper claims
+- **Token Caching**: Automatic refresh with thread-safe concurrent access
+- **Error Handling**: Detailed error types for troubleshooting
+- **Scope Validation**: Ensures tokens have required permissions
+- **Interface Design**: Easy mocking and testing
+- **Bearer Authentication**: Automatic header injection for API requests
+
+**Verification Commands:**
+```bash
+go test ./internal/zoom -v -run "Test.*Auth"  # Run authentication tests
+make build                                    # Build complete application
+make test                                     # Run all tests
+make vet                                      # Run static analysis
+```
 
 ### Feature 1.5: HTTP Client with Retry Logic
 - [ ] Create configurable HTTP client with timeout settings
