@@ -1,0 +1,43 @@
+# Example configuration for zoom-to-box
+# Copy this file to config.yaml and modify for your environment
+
+# Zoom API Server-to-Server OAuth configuration
+zoom:
+  account_id: "your_zoom_account_id"
+  client_id: "your_zoom_client_id"
+  client_secret: "your_zoom_client_secret"
+  base_url: "https://api.zoom.us/v2"  # Default Zoom API URL
+
+# Box integration settings (optional)
+box:
+  enabled: false  # Set to true to enable Box uploads
+  credentials_file: "/path/to/box_credentials.json"
+  folder_id: "your_box_folder_id"
+
+# Download settings
+download:
+  output_dir: "./downloads"      # Local download directory
+  concurrent_limit: 3            # Max concurrent downloads
+  retry_attempts: 3              # Max retry attempts for failed downloads
+  timeout_seconds: 300           # Download timeout in seconds (5 minutes)
+
+# Logging configuration
+logging:
+  level: "info"                  # Log level: debug, info, warn, error
+  file: "./zoom-downloader.log"  # Log file path
+  console: true                  # Enable console output
+  json_format: false             # Use JSON log format
+
+# Active users list settings
+active_users:
+  file: "./active_users.txt"     # Path to active users list file
+  check_enabled: true            # Enable user filtering based on active users list
+
+# Environment variable overrides:
+# ZOOM_ACCOUNT_ID - overrides zoom.account_id
+# ZOOM_CLIENT_ID - overrides zoom.client_id  
+# ZOOM_CLIENT_SECRET - overrides zoom.client_secret
+# ZOOM_BASE_URL - overrides zoom.base_url
+# BOX_CREDENTIALS_FILE - overrides box.credentials_file
+# BOX_FOLDER_ID - overrides box.folder_id
+# DOWNLOAD_OUTPUT_DIR - overrides download.output_dir
