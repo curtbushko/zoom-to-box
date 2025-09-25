@@ -1,4 +1,4 @@
-module github.com/curtbushko/go-zoom-downloader
+module github.com/curtbushko/zoom-to-box
 
 go 1.23
 

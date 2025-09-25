@@ -18,7 +18,7 @@ This project is a cli tool written in go that contacts the zoom api and download
 - has a --limit command line argument that limits the number of recordings to process
 - can save downloads to Box using a --box option
 - authorization keys and settings for Box will be read from environment variables
-- the go-zoom-downloader --help command displays what environment variables are needed for Zoom and Box auth
+- the zoom-to-box --help command displays what environment variables are needed for Zoom and Box auth
 
 # Technical Details
 

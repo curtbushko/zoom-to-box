@@ -1,7 +1,7 @@
 OS ?= $(shell uname | tr '[:upper:]' '[:lower:]')
 ARCH ?= $(shell uname -m | tr '[:upper:]' '[:lower:]')
 DATELOG := "[$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')]"
-BINARY := go-zoom-downloader
+BINARY := zoom-to-box
 
 
 ifeq ($(ARCH),x86_64)

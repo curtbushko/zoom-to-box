@@ -1,1 +1,1 @@
-# go-zoom-downloader
+# zoom-to-box

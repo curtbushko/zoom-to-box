@@ -34,5 +34,5 @@ go.work.sum
 # Custom for this repo
 /bin
 /temp
-go-zoom-downloader
+zoom-to-box
 .claude/settings.local.json

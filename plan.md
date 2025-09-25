@@ -1,4 +1,4 @@
-# go-zoom-downloader Implementation Plan
+# zoom-to-box Implementation Plan
 
 This plan provides a comprehensive roadmap for implementing the Zoom cloud recording downloader CLI tool. Each feature includes specific implementation details, test scenarios, and verification steps.
 
@@ -398,9 +398,9 @@ downloads/
 - [ ] Version information display
 **CLI Structure:**
 ```bash
-go-zoom-downloader [flags]
-go-zoom-downloader help
-go-zoom-downloader version
+zoom-to-box [flags]
+zoom-to-box help
+zoom-to-box version
 ```
 
 **Global Flags:**
@@ -422,8 +422,8 @@ go-zoom-downloader version
 - [ ] Integration with download manager
 **Usage Examples:**
 ```bash
-go-zoom-downloader --meta-only --limit 10
-go-zoom-downloader --limit 50 --output-dir ./recordings
+zoom-to-box --meta-only --limit 10
+zoom-to-box --limit 50 --output-dir ./recordings
 ```
 
 **Tests:**
@@ -784,7 +784,7 @@ go test -bench=. ./...
 go test -tags=integration ./...
 
 # Build and verify
-go build . && ./go-zoom-downloader --help
+go build . && ./zoom-to-box --help
 ```
 
 ### Success Criteria
