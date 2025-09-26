@@ -206,3 +206,8 @@ func (c *Config) Validate() error {
 
 	return nil
 }
+
+// GetBoxConfig returns the Box configuration
+func (c *Config) GetBoxConfig() BoxConfig {
+	return c.Box
+}
