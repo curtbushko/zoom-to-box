@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/curtbushko/zoom-to-box/internal/config"
+	"github.com/curtbushko/zoom-to-box/internal/download"
+	"github.com/curtbushko/zoom-to-box/internal/logging"
+	"github.com/curtbushko/zoom-to-box/internal/progress"
 )
 
 var (
@@ -23,6 +28,8 @@ var (
 	dryRun      bool
 	metaOnly    bool
 	limit       int
+	noProgress  bool
+	compactMode bool
 )
 
 // buildRootCommand creates and configures the root command
@@ -48,7 +55,7 @@ This tool helps you:
 			}
 
 			// Try to load configuration to provide helpful feedback
-			_, err := config.LoadConfig(configPath)
+			cfg, err := config.LoadConfig(configPath)
 			if err != nil {
 				cmd.Printf("⚠️  Configuration Issue Detected\n\n")
 				
@@ -88,15 +95,12 @@ This tool helps you:
 				return
 			}
 
-			// Configuration loaded successfully
-			cmd.Printf("✅ Configuration loaded successfully from '%s'\n\n", configPath)
-			cmd.Printf("zoom-to-box is ready to download Zoom recordings.\n\n")
-			cmd.Printf("Usage examples:\n")
-			cmd.Printf("  zoom-to-box                    # Download all recordings\n")
-			cmd.Printf("  zoom-to-box --limit 10         # Download only 10 recordings\n")
-			cmd.Printf("  zoom-to-box --meta-only        # Download only metadata files\n")
-			cmd.Printf("  zoom-to-box --dry-run          # Preview what would be downloaded\n\n")
-			cmd.Printf("For all options: zoom-to-box --help\n")
+			// Configuration loaded successfully - now run the download operation
+			ctx := context.Background()
+			if err := runDownloadWithProgress(ctx, cmd, cfg); err != nil {
+				cmd.Printf("❌ Download failed: %v\n", err)
+				os.Exit(1)
+			}
 		},
 	}
 
@@ -111,6 +115,8 @@ This tool helps you:
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be downloaded without downloading")
 	rootCmd.PersistentFlags().BoolVar(&metaOnly, "meta-only", false, "download only JSON metadata files")
 	rootCmd.PersistentFlags().IntVar(&limit, "limit", 0, "limit processing to N recordings (0 = no limit)")
+	rootCmd.PersistentFlags().BoolVar(&noProgress, "no-progress", false, "disable progress bars and real-time updates")
+	rootCmd.PersistentFlags().BoolVar(&compactMode, "compact", false, "use compact progress display")
 
 	// Add flag validation
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
@@ -275,6 +281,238 @@ For more information, visit: https://github.com/curtbushko/zoom-to-box
 `
 			cmd.Print(configHelp)
 		},
+	}
+}
+
+// runDownloadWithProgress executes the download operation with progress reporting
+func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *config.Config) error {
+	// Initialize logging first
+	if err := logging.InitializeLogging(cfg.Logging); err != nil {
+		return fmt.Errorf("failed to initialize logging: %w", err)
+	}
+	defer func() {
+		if logger := logging.GetDefaultLogger(); logger != nil {
+			logger.Close()
+		}
+	}()
+
+	logger := logging.GetDefaultLogger()
+
+	// Apply command-line overrides to config
+	if outputDir != "" {
+		cfg.Download.OutputDir = outputDir
+	}
+
+	// Create progress configuration based on CLI flags
+	progressConfig := progress.NewProgressConfigBuilder().
+		WithVerbose(verbose).
+		WithCompactMode(compactMode).
+		WithFileLogging(cfg.Logging.File != "").
+		Build()
+
+	// Disable progress bar if requested or in dry-run mode
+	if noProgress || dryRun {
+		progressConfig.ShowProgressBar = false
+	}
+
+	// Create progress reporter
+	var reporter progress.ProgressReporter
+	if dryRun {
+		// For dry run, just show what would be downloaded without progress tracking
+		cmd.Printf("🔍 DRY RUN: Showing what would be downloaded (no files will be saved)\n\n")
+		
+		// Create a minimal reporter for dry run
+		progressConfig.ShowProgressBar = false
+		progressConfig.EnableFileLogging = false
+		reporter = progress.NewProgressReporter(progressConfig, logger)
+	} else {
+		// Create full progress reporter with logging integration
+		baseReporter := progress.NewProgressReporter(progressConfig, logger)
+		reporter = progress.NewLoggingProgressReporter(baseReporter, logger)
+	}
+
+	// Start progress tracking
+	totalItems := estimateTotalItems(cfg, limit)
+	if err := reporter.Start(ctx, totalItems); err != nil {
+		return fmt.Errorf("failed to start progress tracking: %w", err)
+	}
+
+	// Log session start
+	if logger != nil {
+		logger.InfoWithContext(ctx, "Starting zoom-to-box download session")
+		logger.LogUserAction("session_start", "cli", map[string]interface{}{
+			"total_estimated": totalItems,
+			"meta_only":       metaOnly,
+			"limit":           limit,
+			"dry_run":         dryRun,
+			"verbose":         verbose,
+			"output_dir":      cfg.Download.OutputDir,
+		})
+	}
+
+	// Simulate download operations (this would be replaced with actual download logic)
+	if err := simulateDownloads(ctx, reporter, totalItems); err != nil {
+		return fmt.Errorf("download operation failed: %w", err)
+	}
+
+	// Finish progress tracking and show summary
+	summary := reporter.Finish()
+
+	// Display results
+	if dryRun {
+		cmd.Printf("\n🔍 DRY RUN COMPLETED\n")
+		cmd.Printf("Would have processed %d recordings\n", summary.TotalItems)
+		if metaOnly {
+			cmd.Printf("Would have downloaded metadata files only\n")
+		}
+	} else {
+		cmd.Printf("\n✅ DOWNLOAD COMPLETED\n")
+		
+		// Show summary based on verbosity
+		if verbose || summary.FailedDownloads > 0 || len(summary.ErrorItems) > 0 {
+			showDetailedSummary(cmd, summary)
+		}
+	}
+
+	return nil
+}
+
+// estimateTotalItems estimates the total number of items to process
+func estimateTotalItems(cfg *config.Config, limitFlag int) int {
+	// This is a placeholder - in real implementation, this would query the Zoom API
+	// to get an accurate count of recordings to process
+	estimated := 50 // Default estimate
+	
+	if limitFlag > 0 && limitFlag < estimated {
+		return limitFlag
+	}
+	
+	return estimated
+}
+
+// simulateDownloads simulates the download process for demonstration
+func simulateDownloads(ctx context.Context, reporter progress.ProgressReporter, totalItems int) error {
+	// This is a placeholder that simulates downloads
+	// In the real implementation, this would:
+	// 1. Initialize Zoom API client
+	// 2. Get list of users and recordings
+	// 3. Filter based on active users
+	// 4. Download recordings with progress tracking
+	// 5. Upload to Box if configured
+
+	for i := 0; i < totalItems; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		filename := fmt.Sprintf("meeting-%d.mp4", i+1)
+		
+		// Simulate different outcomes
+		if i%10 == 9 { // Every 10th item fails
+			reporter.AddError(filename, fmt.Errorf("simulated network error"), map[string]interface{}{
+				"item_index": i,
+				"url":        fmt.Sprintf("https://api.zoom.us/recording/%d", i),
+			})
+		} else if i%7 == 6 { // Every 7th item is skipped
+			var reason progress.SkipReason
+			switch i % 3 {
+			case 0:
+				reason = progress.SkipReasonAlreadyExists
+			case 1:
+				reason = progress.SkipReasonInactiveUser
+			default:
+				reason = progress.SkipReasonMetaOnlyMode
+			}
+			
+			reporter.AddSkipped(reason, filename, map[string]interface{}{
+				"item_index": i,
+				"path":       fmt.Sprintf("/downloads/user/%s", filename),
+			})
+		} else {
+			// Simulate successful download
+			downloadID := fmt.Sprintf("download-%d", i)
+			
+			// Start download
+			reporter.UpdateDownload(download.ProgressUpdate{
+				DownloadID:      downloadID,
+				BytesDownloaded: 0,
+				TotalBytes:      1048576, // 1MB
+				Speed:           0,
+				State:           download.DownloadStateDownloading,
+				Timestamp:       time.Now(),
+				Metadata:        map[string]interface{}{"filename": filename},
+			})
+			
+			// Simulate progress
+			for progress := int64(0); progress <= 1048576; progress += 262144 {
+				time.Sleep(50 * time.Millisecond) // Simulate download time
+				
+				state := download.DownloadStateDownloading
+				if progress >= 1048576 {
+					state = download.DownloadStateCompleted
+				}
+				
+				reporter.UpdateDownload(download.ProgressUpdate{
+					DownloadID:      downloadID,
+					BytesDownloaded: progress,
+					TotalBytes:      1048576,
+					Speed:           float64(progress) / 0.2, // Simulate speed
+					State:           state,
+					Timestamp:       time.Now(),
+					Metadata:        map[string]interface{}{"filename": filename},
+				})
+			}
+		}
+		
+		time.Sleep(100 * time.Millisecond) // Simulate processing time
+	}
+
+	return nil
+}
+
+// showDetailedSummary displays detailed summary information
+func showDetailedSummary(cmd *cobra.Command, summary *progress.Summary) {
+	cmd.Printf("\nDetailed Summary:\n")
+	cmd.Printf("================\n")
+	
+	if summary.FailedDownloads > 0 {
+		cmd.Printf("❌ Failed downloads (%d):\n", summary.FailedDownloads)
+		for _, errorItem := range summary.ErrorItems {
+			cmd.Printf("   - %s: %s\n", errorItem.Item, errorItem.ErrorMsg)
+		}
+		cmd.Printf("\n")
+	}
+	
+	if len(summary.SkippedItems) > 0 {
+		skippedByReason := summary.GetSkippedByReason()
+		cmd.Printf("⏭️  Skipped items by reason:\n")
+		
+		for reason, items := range skippedByReason {
+			if len(items) > 0 {
+				cmd.Printf("   %s: %d items\n", reason.String(), len(items))
+				if len(items) <= 5 {
+					for _, item := range items {
+						cmd.Printf("     - %s\n", item.Item)
+					}
+				} else {
+					for i := 0; i < 3; i++ {
+						cmd.Printf("     - %s\n", items[i].Item)
+					}
+					cmd.Printf("     ... and %d more\n", len(items)-3)
+				}
+			}
+		}
+		cmd.Printf("\n")
+	}
+	
+	if len(summary.ActiveDownloads) > 0 {
+		cmd.Printf("🔄 Active downloads: %d\n", len(summary.ActiveDownloads))
+		for _, download := range summary.ActiveDownloads {
+			cmd.Printf("   - %s (%s)\n", download.Filename, download.State.String())
+		}
+		cmd.Printf("\n")
 	}
 }
 

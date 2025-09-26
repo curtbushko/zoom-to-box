@@ -1,0 +1,68 @@
+2025-09-26T20:21:47Z [INFO] Progress tracking started: 5 items to process
+2025-09-26T20:21:47Z [INFO] User action: progress_start total_items=5 start_time=2025-09-26 16:21:47.071617595 -0400 EDT m=+0.000487942 action=progress_start user=system
+2025-09-26T20:21:47Z [INFO] Starting zoom-to-box download session
+2025-09-26T20:21:47Z [INFO] User action: session_start total_estimated=5 action=session_start user=cli meta_only=false limit=5 dry_run=true verbose=true output_dir=./downloads
+2025-09-26T20:21:47Z [INFO] Starting download: meeting-1.mp4 (1.0 MB)
+2025-09-26T20:21:47Z [INFO] User action: download_start action=download_start user=system download_id=download-0 filename=meeting-1.mp4 total_bytes=1048576
+2025-09-26T20:21:47Z [INFO] Download completed: meeting-1.mp4 (1.0 MB in 250.649875ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:47Z [INFO] Performance: download_file completed in 250.649875ms download_id=download-0 filename=meeting-1.mp4 avg_speed=4.1834291758573586e+06 operation=download_file duration_ms=250 bytes_processed=1048576 success=true
+2025-09-26T20:21:47Z [INFO] Starting download: meeting-2.mp4 (1.0 MB)
+2025-09-26T20:21:47Z [INFO] User action: download_start action=download_start user=system download_id=download-1 filename=meeting-2.mp4 total_bytes=1048576
+2025-09-26T20:21:47Z [INFO] Download completed: meeting-2.mp4 (1.0 MB in 250.644505ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:47Z [INFO] Performance: download_file completed in 250.644505ms filename=meeting-2.mp4 avg_speed=4.1835188048507185e+06 operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-1
+2025-09-26T20:21:47Z [INFO] Starting download: meeting-3.mp4 (1.0 MB)
+2025-09-26T20:21:47Z [INFO] User action: download_start action=download_start user=system download_id=download-2 filename=meeting-3.mp4 total_bytes=1048576
+2025-09-26T20:21:48Z [INFO] Download completed: meeting-3.mp4 (1.0 MB in 250.639265ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:48Z [INFO] Performance: download_file completed in 250.639265ms operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-2 filename=meeting-3.mp4 avg_speed=4.183606267756969e+06
+2025-09-26T20:21:48Z [INFO] Starting download: meeting-4.mp4 (1.0 MB)
+2025-09-26T20:21:48Z [INFO] User action: download_start action=download_start user=system download_id=download-3 filename=meeting-4.mp4 total_bytes=1048576
+2025-09-26T20:21:48Z [INFO] Download completed: meeting-4.mp4 (1.0 MB in 250.662798ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:48Z [INFO] Performance: download_file completed in 250.662798ms filename=meeting-4.mp4 avg_speed=4.1832134978402336e+06 operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-3
+2025-09-26T20:21:48Z [INFO] Starting download: meeting-5.mp4 (1.0 MB)
+2025-09-26T20:21:48Z [INFO] User action: download_start action=download_start user=system download_id=download-4 filename=meeting-5.mp4 total_bytes=1048576
+2025-09-26T20:21:48Z [INFO] Download completed: meeting-5.mp4 (1.0 MB in 250.644885ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:48Z [INFO] Performance: download_file completed in 250.644885ms download_id=download-4 filename=meeting-5.mp4 operation=download_file duration_ms=250 bytes_processed=1048576 success=true avg_speed=4.1835124622630943e+06
+2025-09-26T20:21:48Z [INFO] Progress tracking completed: 5 total, 5 completed, 0 failed, 0 skipped
+2025-09-26T20:21:48Z [INFO] Performance: progress_session completed in 1.754534333s success=true completed=5 failed=0 operation=progress_session bytes_processed=5242880 total_items=5 skipped=0 average_speed=4.1834974480277314e+06 duration_ms=1754
+2025-09-26T20:21:53Z [INFO] Progress tracking started: 10 items to process
+2025-09-26T20:21:53Z [INFO] User action: progress_start action=progress_start user=system total_items=10 start_time=2025-09-26 16:21:53.978540929 -0400 EDT m=+0.000518508
+2025-09-26T20:21:53Z [INFO] Starting zoom-to-box download session
+2025-09-26T20:21:53Z [INFO] User action: session_start verbose=false output_dir=./downloads action=session_start user=cli total_estimated=10 meta_only=false limit=10 dry_run=true
+2025-09-26T20:21:53Z [INFO] Starting download: meeting-1.mp4 (1.0 MB)
+2025-09-26T20:21:53Z [INFO] User action: download_start filename=meeting-1.mp4 total_bytes=1048576 action=download_start user=system download_id=download-0
+2025-09-26T20:21:54Z [INFO] Download completed: meeting-1.mp4 (1.0 MB in 250.656788ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:54Z [INFO] Performance: download_file completed in 250.656788ms operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-0 filename=meeting-1.mp4 avg_speed=4.1833137987868893e+06
+2025-09-26T20:21:54Z [INFO] Starting download: meeting-2.mp4 (1.0 MB)
+2025-09-26T20:21:54Z [INFO] User action: download_start action=download_start user=system download_id=download-1 filename=meeting-2.mp4 total_bytes=1048576
+2025-09-26T20:21:54Z [INFO] Download completed: meeting-2.mp4 (1.0 MB in 250.613447ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:54Z [INFO] Performance: download_file completed in 250.613447ms avg_speed=4.184037259580888e+06 download_id=download-1 operation=download_file duration_ms=250 bytes_processed=1048576 success=true filename=meeting-2.mp4
+2025-09-26T20:21:54Z [INFO] Starting download: meeting-3.mp4 (1.0 MB)
+2025-09-26T20:21:54Z [INFO] User action: download_start action=download_start user=system total_bytes=1048576 download_id=download-2 filename=meeting-3.mp4
+2025-09-26T20:21:54Z [INFO] Download completed: meeting-3.mp4 (1.0 MB in 250.63705ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:54Z [INFO] Performance: download_file completed in 250.63705ms operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-2 filename=meeting-3.mp4 avg_speed=4.1836432402950805e+06
+2025-09-26T20:21:55Z [INFO] Starting download: meeting-4.mp4 (1.0 MB)
+2025-09-26T20:21:55Z [INFO] User action: download_start action=download_start user=system download_id=download-3 filename=meeting-4.mp4 total_bytes=1048576
+2025-09-26T20:21:55Z [INFO] Download completed: meeting-4.mp4 (1.0 MB in 250.655505ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:55Z [INFO] Performance: download_file completed in 250.655505ms operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-3 filename=meeting-4.mp4 avg_speed=4.1833352114089816e+06
+2025-09-26T20:21:55Z [INFO] Starting download: meeting-5.mp4 (1.0 MB)
+2025-09-26T20:21:55Z [INFO] User action: download_start total_bytes=1048576 action=download_start user=system download_id=download-4 filename=meeting-5.mp4
+2025-09-26T20:21:55Z [INFO] Download completed: meeting-5.mp4 (1.0 MB in 250.707732ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:55Z [INFO] Performance: download_file completed in 250.707732ms filename=meeting-5.mp4 avg_speed=4.182463746271694e+06 operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-4
+2025-09-26T20:21:55Z [INFO] Starting download: meeting-6.mp4 (1.0 MB)
+2025-09-26T20:21:55Z [INFO] User action: download_start filename=meeting-6.mp4 total_bytes=1048576 action=download_start user=system download_id=download-5
+2025-09-26T20:21:55Z [INFO] Download completed: meeting-6.mp4 (1.0 MB in 250.66909ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:55Z [INFO] Performance: download_file completed in 250.66909ms download_id=download-5 filename=meeting-6.mp4 operation=download_file duration_ms=250 bytes_processed=1048576 success=true avg_speed=4.183108495746325e+06
+2025-09-26T20:21:56Z [WARN] Skipping item: meeting-7.mp4 (reason: already_exists)
+2025-09-26T20:21:56Z [INFO] User action: item_skipped action=item_skipped user=system item=meeting-7.mp4 reason=already_exists details=map[item_index:6 path:/downloads/user/meeting-7.mp4]
+2025-09-26T20:21:56Z [INFO] Starting download: meeting-8.mp4 (1.0 MB)
+2025-09-26T20:21:56Z [INFO] User action: download_start download_id=download-7 filename=meeting-8.mp4 total_bytes=1048576 action=download_start user=system
+2025-09-26T20:21:56Z [INFO] Download completed: meeting-8.mp4 (1.0 MB in 251.162192ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:56Z [INFO] Performance: download_file completed in 251.162192ms duration_ms=251 bytes_processed=1048576 success=true download_id=download-7 filename=meeting-8.mp4 avg_speed=4.174895877640692e+06 operation=download_file
+2025-09-26T20:21:56Z [INFO] Starting download: meeting-9.mp4 (1.0 MB)
+2025-09-26T20:21:56Z [INFO] User action: download_start total_bytes=1048576 download_id=download-8 action=download_start user=system filename=meeting-9.mp4
+2025-09-26T20:21:56Z [INFO] Download completed: meeting-9.mp4 (1.0 MB in 250.645046ms, avg speed: 4.0 MB/s)
+2025-09-26T20:21:56Z [INFO] Performance: download_file completed in 250.645046ms filename=meeting-9.mp4 avg_speed=4.183509775014664e+06 operation=download_file duration_ms=250 bytes_processed=1048576 success=true download_id=download-8
+2025-09-26T20:21:56Z [ERROR] Error processing item: meeting-10.mp4 - simulated network error
+2025-09-26T20:21:56Z [INFO] User action: item_error user=system item=meeting-10.mp4 error=simulated network error details=map[item_index:9 url:https://api.zoom.us/recording/9] action=item_error
+2025-09-26T20:21:56Z [INFO] Progress tracking completed: 10 total, 8 completed, 0 failed, 1 skipped
+2025-09-26T20:21:56Z [INFO] Performance: progress_session completed in 3.008323036s failed=0 skipped=1 average_speed=4.182328600181754e+06 operation=progress_session duration_ms=3008 bytes_processed=8388608 total_items=10 success=true completed=8
