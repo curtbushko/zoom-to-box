@@ -245,16 +245,47 @@ make test                                     # Run all tests
 make vet                                      # Run static analysis
 ```
 
-### Feature 1.5: HTTP Client with Retry Logic
-- [ ] Create configurable HTTP client with timeout settings
-- [ ] Implement exponential backoff for rate limiting
-- [ ] Handle Zoom API-specific error responses
-- [ ] Support download URL redirection
+### Feature 1.5: HTTP Client with Retry Logic ✅ COMPLETED
+- [x] Create configurable HTTP client with timeout settings
+- [x] Implement exponential backoff for rate limiting
+- [x] Handle Zoom API-specific error responses
+- [x] Support download URL redirection
 **Tests:**
-- [ ] Test retry logic with simulated failures
-- [ ] Verify timeout handling
-- [ ] Test rate limit response handling (HTTP 429)
-- [ ] Validate redirect following for download URLs
+- [x] Test retry logic with simulated failures
+- [x] Verify timeout handling
+- [x] Test rate limit response handling (HTTP 429)
+- [x] Validate redirect following for download URLs
+
+**Implementation Summary:**
+- ✅ Created `/internal/zoom/httpclient.go` with complete HTTP retry client
+- ✅ Created comprehensive test suite in `/internal/zoom/httpclient_test.go`
+- ✅ Configurable timeouts integrated with DownloadConfig
+- ✅ Exponential backoff with jitter (500ms-5s range)
+- ✅ Smart retry logic for 429, 5xx status codes
+- ✅ Zoom API-specific error parsing and handling
+- ✅ Retry-After header support (seconds and HTTP date formats)
+- ✅ Automatic redirect following with configurable limits
+- ✅ Thread-safe client with proper resource management
+- ✅ Integration with existing configuration system
+- ✅ Helper methods: GetWithRetry, PostWithRetry, CheckConnectivity
+- ✅ All quality gates passed: 6 test functions, 20+ scenarios
+
+**Key Features:**
+- **Smart Retries**: Only retries appropriate errors (network, 5xx, 429)
+- **Exponential Backoff**: 2^attempt with ±25% jitter to avoid thundering herd
+- **Rate Limit Handling**: Respects Retry-After headers from Zoom API
+- **Redirect Support**: Follows download URL redirections automatically
+- **Error Handling**: Typed errors (ZoomAPIError, HTTPError) with detailed context
+- **Configuration**: Integrates with YAML config timeout and retry settings
+- **Resource Management**: Proper connection handling and cleanup
+
+**Verification Commands:**
+```bash
+go test ./internal/zoom -v -run "HTTP|Backoff|Rate|Redirect|Timeout"  # HTTP client tests
+make build                                                             # Build application
+make test                                                              # Run all tests
+make vet                                                               # Static analysis
+```
 
 ### Feature 1.6: Cloud Recording API Client
 - [ ] Implement `ListUserRecordings()` method for `/users/{userId}/recordings`
