@@ -857,16 +857,17 @@ go vet ./...                                          # Run static analysis
 
 ## Phase 3: CLI Interface & Commands
 
-### Feature 3.1: Cobra CLI Application Structure
-- [ ] Main command structure with subcommands
-- [ ] Global flags for common options
-- [ ] Proper help text and usage examples
-- [ ] Version information display
+### Feature 3.1: Cobra CLI Application Structure ✅ COMPLETED
+- [x] Main command structure with subcommands
+- [x] Global flags for common options
+- [x] Proper help text and usage examples
+- [x] Version information display
 **CLI Structure:**
 ```bash
 zoom-to-box [flags]
 zoom-to-box help
 zoom-to-box version
+zoom-to-box config
 ```
 
 **Global Flags:**
@@ -876,10 +877,69 @@ zoom-to-box version
 - `--dry-run` - Show what would be downloaded without downloading
 
 **Tests:**
-- [ ] Test command parsing and flag handling
-- [ ] Verify help text generation
-- [ ] Test version display
-- [ ] Validate flag combination handling
+- [x] Test command parsing and flag handling
+- [x] Verify help text generation
+- [x] Test version display
+- [x] Validate flag combination handling
+
+**Implementation Summary:**
+- ✅ Created comprehensive CLI structure in `/cmd/zoom-to-box/main.go`
+- ✅ Created full test suite in `/cmd/zoom-to-box/main_test.go`
+- ✅ Implemented main command with proper help text and usage examples
+- ✅ Added version command with build information (version, commit, build date)
+- ✅ Added config command with comprehensive configuration help and examples
+- ✅ Implemented all required global flags with proper descriptions
+- ✅ Interface-driven design with `buildRootCommand()` for testability
+- ✅ Comprehensive help system showing all commands and flags
+- ✅ Build-time version injection support for CI/CD pipelines
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **Main Command**: Shows usage information and help prompt
+- **Version Command**: Displays version, commit hash, and build date
+- **Config Command**: Shows complete configuration file structure and examples
+- **Global Flags**: Common options available across all commands
+- **Help System**: Comprehensive help text with usage examples
+- **Build Integration**: Version information can be injected at build time
+- **Test Coverage**: Complete test suite covering all functionality
+
+**CLI Commands Available:**
+```bash
+zoom-to-box                    # Show basic usage info
+zoom-to-box --help            # Show full help with all commands and flags
+zoom-to-box version           # Show version information
+zoom-to-box config            # Show configuration help and examples
+zoom-to-box help [command]    # Show help for specific command
+```
+
+**Global Flags (Available on all commands):**
+- `--config string`: Configuration file path (default: config.yaml)
+- `--output-dir string`: Base download directory (overrides config)
+- `--verbose`: Enable verbose logging
+- `--dry-run`: Show what would be downloaded without downloading
+
+**Configuration Help System:**
+The `zoom-to-box config` command provides:
+- Complete YAML configuration file structure
+- All configuration sections (zoom, download, logging, box, active_users)
+- Environment variable alternatives for credentials
+- Usage examples with both config file and environment variables
+- Links to documentation and GitHub repository
+
+**Build Integration:**
+Version information can be set at build time:
+```bash
+go build -ldflags "-X main.version=v1.0.0 -X main.commit=abc123 -X main.buildDate=2024-01-15T10:00:00Z" ./cmd/zoom-to-box
+```
+
+**Verification Commands:**
+```bash
+go test ./cmd/zoom-to-box -v                     # Run CLI tests
+go build ./cmd/zoom-to-box                       # Build CLI application
+./zoom-to-box --help                            # Test help output
+./zoom-to-box version                           # Test version command
+./zoom-to-box config                            # Test config help
+```
 
 ### Feature 3.2: Meta-only and Limit Flags
 - [ ] `--meta-only` flag downloads only JSON metadata files
