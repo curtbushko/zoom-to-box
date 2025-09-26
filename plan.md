@@ -509,14 +509,14 @@ make test                                          # Run all tests
 make vet                                           # Static analysis
 ```
 
-### Feature 2.4: Filename Sanitization
-- [ ] Convert meeting topic to lowercase
-- [ ] Replace spaces with dashes
-- [ ] Remove or replace invalid filesystem characters
-- [ ] Handle Unicode characters appropriately
-- [ ] Sanitize email addresses by removing @domain.com portion for directory names
-- [ ] Add time component to ensure filename uniqueness
-- [ ] Add file extensions (.mp4, .json, etc.)
+### Feature 2.4: Filename Sanitization ✅ COMPLETED
+- [x] Convert meeting topic to lowercase
+- [x] Replace spaces with dashes
+- [x] Remove or replace invalid filesystem characters
+- [x] Handle Unicode characters appropriately
+- [x] Sanitize email addresses by removing @domain.com portion for directory names
+- [x] Add time component to ensure filename uniqueness
+- [x] Add file extensions (.mp4, .json, etc.)
 **Filename Format:** `<sanitized-topic>-<HHMM>.<extension>`
 
 **Sanitization Rules:**
@@ -531,14 +531,45 @@ make vet                                           # Static analysis
 - Consistent sorting when listing files chronologically
 
 **Tests:**
-- [ ] Test various special characters and Unicode
-- [ ] Verify case conversion
-- [ ] Test extremely long topic names
-- [ ] Validate file extension handling
-- [ ] Test email address sanitization (john.doe@company.com → john.doe)
-- [ ] Test time component formatting and uniqueness (HHMM format)
-- [ ] Verify consistent filename generation for duplicate topics
-- [ ] Test timezone handling in time component
+- [x] Test various special characters and Unicode
+- [x] Verify case conversion
+- [x] Test extremely long topic names
+- [x] Validate file extension handling
+- [x] Test email address sanitization (john.doe@company.com → john.doe)
+- [x] Test time component formatting and uniqueness (HHMM format)
+- [x] Verify consistent filename generation for duplicate topics
+- [x] Test timezone handling in time component
+
+**Implementation Summary:**
+- ✅ Created `/internal/filename/sanitizer.go` with complete FileSanitizer implementation
+- ✅ Created comprehensive test suite in `/internal/filename/sanitizer_test.go`
+- ✅ Interface-driven design with FileSanitizer interface for testability
+- ✅ Unicode normalization using golang.org/x/text for diacritic removal
+- ✅ Robust special character handling with proper word boundary preservation
+- ✅ Configurable options (max length, default topic)
+- ✅ Support for all file types (MP4, M4A, JSON, TRANSCRIPT, CHAT, CC, CSV, etc.)
+- ✅ Time formatting in original timezone context for meeting accuracy
+- ✅ Integration with existing DirectoryManager via DirectoryResult methods
+- ✅ Comprehensive edge case testing (emojis, long titles, empty topics, etc.)
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **Topic Sanitization**: Converts topics to filesystem-safe lowercase with dashes
+- **Unicode Handling**: Normalizes accented characters and removes emojis
+- **Time Component**: HHMM format preserving original timezone context
+- **File Extensions**: Automatic extension mapping for all Zoom file types
+- **Interface Design**: Easy integration and mocking for tests
+- **Configuration**: Customizable max length and default topic options
+- **Directory Integration**: Seamless integration with existing directory manager
+
+**Verification Commands:**
+```bash
+go test ./internal/filename -v                    # Run filename sanitizer tests
+go test ./internal/directory -v                   # Run directory integration tests
+make build                                        # Build complete application
+make test                                         # Run all tests
+make vet                                          # Run static analysis
+```
 
 ### Feature 2.5: Comprehensive Logging System
 - [ ] Implement structured logging with configurable levels
@@ -949,24 +980,8 @@ internal/
 - [ ] Test network interruption recovery
 - [ ] Performance testing with large datasets
 
-### Feature 5.3: Performance Benchmarking
-- [ ] Benchmarks for download throughput
-- [ ] Memory usage profiling
-- [ ] Concurrent download performance
-- [ ] Large file handling optimization
-**Benchmark Scenarios:**
-- Single large file (>1GB) download
-- Multiple concurrent small file downloads
-- Memory usage during large operations
-- CPU utilization during processing
 
-**Tests:**
-- [ ] Automated benchmark execution
-- [ ] Performance regression detection
-- [ ] Memory leak detection
-- [ ] Scalability testing
-
-### Feature 5.4: Documentation and Examples
+### Feature 5.3: Documentation and Examples
 - [ ] Comprehensive README with setup instructions
 - [ ] API documentation with examples
 - [ ] Configuration guide for different scenarios

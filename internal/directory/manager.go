@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/users"
+	"github.com/curtbushko/zoom-to-box/internal/zoom"
 )
 
 // DirectoryManager defines the interface for directory structure operations
@@ -34,6 +36,23 @@ type DirectoryResult struct {
 	Day           string // Day component (DD)
 	BasePath      string // Base directory path
 	RelativePath  string // Relative path from base directory
+}
+
+// GenerateFilePath creates a complete file path with sanitized filename for a recording
+func (dr *DirectoryResult) GenerateFilePath(recording zoom.Recording, fileType string, sanitizer filename.FileSanitizer) string {
+	filename := sanitizer.GenerateFilename(recording, fileType)
+	return filepath.Join(dr.FullPath, filename)
+}
+
+// GenerateRelativeFilePath creates a relative file path from the base directory
+func (dr *DirectoryResult) GenerateRelativeFilePath(recording zoom.Recording, fileType string, sanitizer filename.FileSanitizer) string {
+	filename := sanitizer.GenerateFilename(recording, fileType)
+	return filepath.Join(dr.RelativePath, filename)
+}
+
+// GenerateFilename generates just the sanitized filename for a recording
+func (dr *DirectoryResult) GenerateFilename(recording zoom.Recording, fileType string, sanitizer filename.FileSanitizer) string {
+	return sanitizer.GenerateFilename(recording, fileType)
 }
 
 // DirectoryStats provides statistics about directory operations

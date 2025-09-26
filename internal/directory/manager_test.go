@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/users"
+	"github.com/curtbushko/zoom-to-box/internal/zoom"
 )
 
 // TestDirectoryManager tests the complete directory structure generation functionality
@@ -512,6 +514,144 @@ func TestInvalidDirectoryPaths(t *testing.T) {
 				t.Error("Expected error but got none")
 			} else if !tt.expectedError && err != nil {
 				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestDirectoryResultFilenameGeneration tests the filename generation integration
+func TestDirectoryResultFilenameGeneration(t *testing.T) {
+	tempDir := t.TempDir()
+	baseDir := filepath.Join(tempDir, "downloads")
+	
+	// Create directory manager without active user filtering
+	activeUserManager, err := users.NewActiveUserManager(users.ActiveUserConfig{FilePath: ""})
+	if err != nil {
+		t.Fatalf("Failed to create active user manager: %v", err)
+	}
+	defer activeUserManager.Close()
+
+	config := DirectoryConfig{
+		BaseDirectory: baseDir,
+		CreateDirs:    true,
+	}
+	manager := NewDirectoryManager(config, activeUserManager)
+
+	// Create test recording
+	testTime := time.Date(2024, 1, 15, 14, 30, 0, 0, time.UTC)
+	recording := zoom.Recording{
+		Topic:     "Weekly Team Meeting",
+		StartTime: testTime,
+	}
+
+	// Generate directory
+	result, err := manager.GenerateDirectory("john.doe@company.com", testTime)
+	if err != nil {
+		t.Fatalf("Failed to generate directory: %v", err)
+	}
+
+	// Create filename sanitizer
+	sanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+
+	// Test full file path generation
+	fullPath := result.GenerateFilePath(recording, "MP4", sanitizer)
+	expectedFullPath := filepath.Join(baseDir, "john.doe", "2024", "01", "15", "weekly-team-meeting-1430.mp4")
+	if fullPath != expectedFullPath {
+		t.Errorf("GenerateFilePath: expected %s, got %s", expectedFullPath, fullPath)
+	}
+
+	// Test relative file path generation
+	relativePath := result.GenerateRelativeFilePath(recording, "JSON", sanitizer)
+	expectedRelativePath := filepath.Join("john.doe", "2024", "01", "15", "weekly-team-meeting-1430.json")
+	if relativePath != expectedRelativePath {
+		t.Errorf("GenerateRelativeFilePath: expected %s, got %s", expectedRelativePath, relativePath)
+	}
+
+	// Test filename only generation
+	filename := result.GenerateFilename(recording, "TRANSCRIPT", sanitizer)
+	expectedFilename := "weekly-team-meeting-1430.txt"
+	if filename != expectedFilename {
+		t.Errorf("GenerateFilename: expected %s, got %s", expectedFilename, filename)
+	}
+}
+
+// TestDirectoryResultWithComplexFilenames tests filename generation with complex topics
+func TestDirectoryResultWithComplexFilenames(t *testing.T) {
+	tempDir := t.TempDir()
+	baseDir := filepath.Join(tempDir, "downloads")
+	
+	// Create directory manager without active user filtering
+	activeUserManager, err := users.NewActiveUserManager(users.ActiveUserConfig{FilePath: ""})
+	if err != nil {
+		t.Fatalf("Failed to create active user manager: %v", err)
+	}
+	defer activeUserManager.Close()
+
+	config := DirectoryConfig{
+		BaseDirectory: baseDir,
+		CreateDirs:    true,
+	}
+	manager := NewDirectoryManager(config, activeUserManager)
+
+	tests := []struct {
+		name         string
+		topic        string
+		fileType     string
+		expectedFile string
+	}{
+		{
+			name:         "special characters",
+			topic:        "Q4 Planning: Budget & Goals",
+			fileType:     "MP4",
+			expectedFile: "q4-planning-budget-goals-1430.mp4",
+		},
+		{
+			name:         "unicode characters",
+			topic:        "Café Meeting 🎉",
+			fileType:     "M4A",
+			expectedFile: "cafe-meeting-1430.m4a",
+		},
+		{
+			name:         "empty topic fallback",
+			topic:        "",
+			fileType:     "JSON",
+			expectedFile: "untitled-1430.json",
+		},
+		{
+			name:         "parentheses and slashes",
+			topic:        "Test/Meeting (Final)",
+			fileType:     "CHAT",
+			expectedFile: "test-meeting-final-1430.txt",
+		},
+	}
+
+	// Create filename sanitizer
+	sanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testTime := time.Date(2024, 1, 15, 14, 30, 0, 0, time.UTC)
+			recording := zoom.Recording{
+				Topic:     tt.topic,
+				StartTime: testTime,
+			}
+
+			// Generate directory
+			result, err := manager.GenerateDirectory("test.user@company.com", testTime)
+			if err != nil {
+				t.Fatalf("Failed to generate directory: %v", err)
+			}
+
+			// Test filename generation
+			filename := result.GenerateFilename(recording, tt.fileType, sanitizer)
+			if filename != tt.expectedFile {
+				t.Errorf("Expected filename %s, got %s", tt.expectedFile, filename)
+			}
+
+			// Test that full path includes correct filename
+			fullPath := result.GenerateFilePath(recording, tt.fileType, sanitizer)
+			if filepath.Base(fullPath) != tt.expectedFile {
+				t.Errorf("Full path doesn't end with expected filename: %s", fullPath)
 			}
 		})
 	}
