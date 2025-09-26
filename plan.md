@@ -571,11 +571,11 @@ make test                                         # Run all tests
 make vet                                          # Run static analysis
 ```
 
-### Feature 2.5: Comprehensive Logging System
-- [ ] Implement structured logging with configurable levels
-- [ ] Support both file and console output with different formats
-- [ ] Log all major operations including API calls, downloads, and errors
-- [ ] Provide request/response logging for debugging
+### Feature 2.5: Comprehensive Logging System ✅ COMPLETED
+- [x] Implement structured logging with configurable levels
+- [x] Support both file and console output with different formats
+- [x] Log all major operations including API calls, downloads, and errors
+- [x] Provide request/response logging for debugging
 **Logging Features:**
 - Multiple log levels: DEBUG, INFO, WARN, ERROR
 - Configurable output formats: plain text and JSON
@@ -598,11 +598,71 @@ make vet                                          # Run static analysis
 ```
 
 **Tests:**
-- [ ] Test logging configuration and initialization
-- [ ] Verify log level filtering
-- [ ] Test file rotation and size limits
-- [ ] Test JSON and plain text formatting
-- [ ] Test contextual logging with request IDs
+- [x] Test logging configuration and initialization
+- [x] Verify log level filtering
+- [x] Test file rotation and size limits
+- [x] Test JSON and plain text formatting
+- [x] Test contextual logging with request IDs
+
+**Implementation Summary:**
+- ✅ Created `/internal/logging/logger.go` with complete Logger implementation
+- ✅ Created comprehensive test suite in `/internal/logging/logger_test.go`
+- ✅ Interface-driven design with Logger interface for testability
+- ✅ Structured logging with configurable levels (DEBUG, INFO, WARN, ERROR)
+- ✅ Dual output support (console and file) with format selection
+- ✅ JSON and plain text format support with automatic field flattening
+- ✅ Contextual logging with request ID propagation via context.Context
+- ✅ Specialized logging methods for user actions, performance metrics, and API calls
+- ✅ Thread-safe concurrent logging with mutex protection
+- ✅ Global logger with package-level convenience functions
+- ✅ Request ID generation and context utilities
+- ✅ File handle management with proper cleanup
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **Structured Logging**: Configurable levels with JSON/text output formats
+- **Contextual Logging**: Request ID tracking via context.Context throughout request lifecycle
+- **Specialized Methods**: UserAction, Performance, APIRequest/Response logging with structured data
+- **Thread Safety**: Safe for concurrent access with proper synchronization
+- **Global Access**: Package-level convenience functions for easy integration
+- **File Management**: Automatic file creation and proper cleanup
+- **API Integration**: Built-in support for API request/response logging with header sanitization
+- **Performance Tracking**: Duration, bytes processed, and success metrics
+
+**Usage Examples:**
+```go
+// Initialize logging
+err := logging.InitializeLogging(config.Logging)
+
+// Basic logging
+logging.Info("Starting application")
+logging.Error("Failed to connect: %v", err)
+
+// Contextual logging
+ctx := logging.WithRequestID(context.Background(), "req-123")
+logging.InfoWithContext(ctx, "Processing request")
+
+// Specialized logging
+logging.LogUserAction("download_start", "john.doe@company.com", map[string]interface{}{
+    "file_name": "meeting.mp4",
+    "file_size": 1048576,
+})
+
+logging.LogPerformance(logging.PerformanceMetrics{
+    Operation: "download_file",
+    Duration: time.Second * 5,
+    BytesProcessed: 1048576,
+    Success: true,
+})
+```
+
+**Verification Commands:**
+```bash
+go test ./internal/logging -v                     # Run logging system tests
+make build                                        # Build complete application
+make test                                         # Run all tests
+make vet                                          # Run static analysis
+```
 
 ### Feature 2.6: Download Status File System
 - [ ] JSON-based status file tracking download states
