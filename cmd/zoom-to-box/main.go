@@ -23,6 +23,8 @@ var (
 	outputDir   string
 	verbose     bool
 	dryRun      bool
+	metaOnly    bool
+	limit       int
 )
 
 // buildRootCommand creates and configures the root command
@@ -54,6 +56,16 @@ This tool helps you:
 	rootCmd.PersistentFlags().StringVar(&outputDir, "output-dir", "", "base download directory (overrides config)")
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "verbose logging")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be downloaded without downloading")
+	rootCmd.PersistentFlags().BoolVar(&metaOnly, "meta-only", false, "download only JSON metadata files")
+	rootCmd.PersistentFlags().IntVar(&limit, "limit", 0, "limit processing to N recordings (0 = no limit)")
+
+	// Add flag validation
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if limit < 0 {
+			return fmt.Errorf("limit must be a positive number or 0, got: %d", limit)
+		}
+		return nil
+	}
 
 	return rootCmd
 }

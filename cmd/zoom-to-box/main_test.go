@@ -125,7 +125,7 @@ func TestGlobalFlags(t *testing.T) {
 	cmd := createRootCommand()
 	
 	// Test that global flags are defined
-	expectedFlags := []string{"config", "output-dir", "verbose", "dry-run"}
+	expectedFlags := []string{"config", "output-dir", "verbose", "dry-run", "meta-only", "limit"}
 	
 	for _, flagName := range expectedFlags {
 		flag := cmd.PersistentFlags().Lookup(flagName)
@@ -159,6 +159,36 @@ func TestFlagValidation(t *testing.T) {
 		{
 			name:        "dry-run flag",
 			args:        []string{"--dry-run"},
+			expectError: false,
+		},
+		{
+			name:        "meta-only flag",
+			args:        []string{"--meta-only"},
+			expectError: false,
+		},
+		{
+			name:        "valid positive limit",
+			args:        []string{"--limit", "10"},
+			expectError: false,
+		},
+		{
+			name:        "zero limit (no limit) is valid",
+			args:        []string{"--limit", "0"},
+			expectError: false,
+		},
+		{
+			name:        "negative limit should error",
+			args:        []string{"--limit", "-5"},
+			expectError: true,
+		},
+		{
+			name:        "non-numeric limit should error",
+			args:        []string{"--limit", "abc"},
+			expectError: true,
+		},
+		{
+			name:        "combine meta-only and limit",
+			args:        []string{"--meta-only", "--limit", "50"},
 			expectError: false,
 		},
 	}
@@ -215,6 +245,66 @@ func TestHelpCommand(t *testing.T) {
 		if !strings.Contains(output, content) {
 			t.Errorf("Expected help output to contain %q, got %q", content, output)
 		}
+	}
+}
+
+func TestMetaOnlyAndLimitFlags(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		expectedOutput string
+		expectError    bool
+	}{
+		{
+			name:           "help shows meta-only flag",
+			args:           []string{"--help"},
+			expectedOutput: "--meta-only",
+			expectError:    false,
+		},
+		{
+			name:           "help shows limit flag",
+			args:           []string{"--help"},
+			expectedOutput: "--limit",
+			expectError:    false,
+		},
+		{
+			name:           "meta-only flag description in help",
+			args:           []string{"--help"},
+			expectedOutput: "download only JSON metadata files",
+			expectError:    false,
+		},
+		{
+			name:           "limit flag description in help",
+			args:           []string{"--help"},
+			expectedOutput: "limit processing to N recordings",
+			expectError:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := createRootCommand()
+			
+			// Capture output
+			buf := &bytes.Buffer{}
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			
+			output := buf.String()
+			if !strings.Contains(output, tt.expectedOutput) {
+				t.Errorf("Expected output to contain %q, got %q", tt.expectedOutput, output)
+			}
+		})
 	}
 }
 

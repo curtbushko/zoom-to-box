@@ -941,11 +941,11 @@ go build ./cmd/zoom-to-box                       # Build CLI application
 ./zoom-to-box config                            # Test config help
 ```
 
-### Feature 3.2: Meta-only and Limit Flags
-- [ ] `--meta-only` flag downloads only JSON metadata files
-- [ ] `--limit N` flag limits processing to N recordings
-- [ ] Proper flag validation and error messages
-- [ ] Integration with download manager
+### Feature 3.2: Meta-only and Limit Flags ✅ COMPLETED
+- [x] `--meta-only` flag downloads only JSON metadata files
+- [x] `--limit N` flag limits processing to N recordings
+- [x] Proper flag validation and error messages
+- [x] Integration with download manager
 **Usage Examples:**
 ```bash
 zoom-to-box --meta-only --limit 10
@@ -953,10 +953,36 @@ zoom-to-box --limit 50 --output-dir ./recordings
 ```
 
 **Tests:**
-- [ ] Test meta-only download behavior
-- [ ] Verify limit functionality with various values
-- [ ] Test flag validation (negative numbers, zero, etc.)
-- [ ] Test combination of flags
+- [x] Test meta-only download behavior
+- [x] Verify limit functionality with various values
+- [x] Test flag validation (negative numbers, zero, etc.)
+- [x] Test combination of flags
+
+**Implementation Summary:**
+- ✅ Added `--meta-only` boolean flag for downloading only JSON metadata files
+- ✅ Added `--limit` integer flag for limiting processing to N recordings (0 = no limit)
+- ✅ Implemented proper flag validation with PersistentPreRunE for negative limit values
+- ✅ Added comprehensive test coverage for both flags in main_test.go
+- ✅ Flag descriptions appear properly in help output
+- ✅ Flag combinations work correctly (--meta-only --limit N)
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **Meta-only Mode**: Downloads only JSON metadata files when --meta-only flag is used
+- **Limit Processing**: Limits download processing to specified number of recordings
+- **Input Validation**: Prevents negative limit values with clear error messages
+- **Zero Limit**: 0 means no limit, allowing unlimited processing
+- **Flag Combination**: Both flags can be used together effectively
+- **Help Integration**: Flags appear in help output with clear descriptions
+
+**Verification Commands:**
+```bash
+go test ./cmd/zoom-to-box -v                     # Run CLI tests including new flags
+go run ./cmd/zoom-to-box --help                  # Show help with new flags
+go run ./cmd/zoom-to-box --meta-only --limit 10  # Test flag combination
+go run ./cmd/zoom-to-box --limit -5              # Test validation (should error)
+make build && make test && make vet              # Run all quality gates
+```
 
 ### Feature 3.3: Configuration File Help System
 - [ ] Display required configuration file structure in help output
