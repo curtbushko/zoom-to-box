@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -23,9 +24,9 @@ func TestRootCommand(t *testing.T) {
 			expectError:    false,
 		},
 		{
-			name:           "no args shows basic usage",
+			name:           "no args shows configuration detection",
 			args:           []string{},
-			expectedOutput: "zoom-to-box - Use --help for usage information",
+			expectedOutput: "Configuration Issue Detected",
 			expectError:    false,
 		},
 	}
@@ -104,14 +105,32 @@ func TestConfigCommand(t *testing.T) {
 	// Check that config help contains expected sections
 	expectedContent := []string{
 		"Configuration File Structure",
+		"ZOOM API CONFIGURATION (Required):",
 		"zoom:",
 		"account_id:",
 		"client_id:",
 		"client_secret:",
-		"Environment Variables:",
+		"DOWNLOAD CONFIGURATION:",
+		"download:",
+		"output_dir:",
+		"concurrent_limit:",
+		"LOGGING CONFIGURATION:",
+		"logging:",
+		"level:",
+		"BOX INTEGRATION (Optional):",
+		"box:",
+		"enabled:",
+		"ACTIVE USERS FILTERING (Optional):",
+		"active_users:",
+		"ENVIRONMENT VARIABLES:",
 		"ZOOM_ACCOUNT_ID",
 		"ZOOM_CLIENT_ID",
 		"ZOOM_CLIENT_SECRET",
+		"AUTHENTICATION METHODS:",
+		"Server-to-Server OAuth",
+		"EXAMPLE USAGE:",
+		"DIRECTORY STRUCTURE:",
+		"TROUBLESHOOTING:",
 	}
 	
 	for _, content := range expectedContent {
@@ -305,6 +324,179 @@ func TestMetaOnlyAndLimitFlags(t *testing.T) {
 				t.Errorf("Expected output to contain %q, got %q", tt.expectedOutput, output)
 			}
 		})
+	}
+}
+
+// TestConfigurationDetection tests the configuration detection and helpful error messages
+func TestConfigurationDetection(t *testing.T) {
+	tests := []struct {
+		name           string
+		configFile     string
+		envVars        map[string]string
+		expectedOutput []string
+	}{
+		{
+			name:       "missing config file shows helpful guidance",
+			configFile: "nonexistent.yaml",
+			envVars:    map[string]string{},
+			expectedOutput: []string{
+				"Configuration Issue Detected",
+				"Configuration file 'nonexistent.yaml' not found",
+				"To get started:",
+				"zoom-to-box config",
+				"Copy config.example.yaml to config.yaml",
+				"Alternative: Set environment variables",
+			},
+		},
+		{
+			name:       "environment variables detected shows different message",
+			configFile: "nonexistent.yaml",
+			envVars: map[string]string{
+				"ZOOM_ACCOUNT_ID":     "test-account",
+				"ZOOM_CLIENT_ID":      "test-client",
+				"ZOOM_CLIENT_SECRET":  "test-secret",
+			},
+			expectedOutput: []string{
+				"Configuration Issue Detected",
+				"Zoom credentials found in environment variables",
+				"You can run 'zoom-to-box' without a config file",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set up environment variables
+			for key, value := range tt.envVars {
+				os.Setenv(key, value)
+				defer os.Unsetenv(key)
+			}
+
+			cmd := createRootCommand()
+			
+			// Set config file if specified
+			if tt.configFile != "" {
+				cmd.SetArgs([]string{"--config", tt.configFile})
+			}
+			
+			// Capture output
+			buf := &bytes.Buffer{}
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			
+			err := cmd.Execute()
+			
+			// Should not error, just provide helpful output
+			if err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			
+			output := buf.String()
+			
+			// Check all expected output strings
+			for _, expected := range tt.expectedOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain %q, got %q", expected, output)
+				}
+			}
+		})
+	}
+}
+
+// TestEnhancedConfigHelp tests the enhanced configuration help content
+func TestEnhancedConfigHelp(t *testing.T) {
+	cmd := createRootCommand()
+	
+	// Capture output
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	
+	// Execute config command
+	cmd.SetArgs([]string{"config"})
+	err := cmd.Execute()
+	
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+	
+	output := buf.String()
+	
+	// Test specific enhanced content sections
+	tests := []struct {
+		name     string
+		content  string
+		required bool
+	}{
+		{"Zoom API section", "ZOOM API CONFIGURATION (Required):", true},
+		{"Server-to-Server OAuth info", "Server-to-Server OAuth", true},
+		{"Required scopes", "recording:read, user:read, meeting:read", true},
+		{"Box integration section", "BOX INTEGRATION (Optional):", true},
+		{"Box credentials format", "box_credentials.json", true},
+		{"Active users section", "ACTIVE USERS FILTERING (Optional):", true},
+		{"Environment variables section", "ENVIRONMENT VARIABLES:", true},
+		{"Authentication methods", "AUTHENTICATION METHODS:", true},
+		{"Example usage section", "EXAMPLE USAGE:", true},
+		{"Directory structure", "DIRECTORY STRUCTURE:", true},
+		{"Troubleshooting section", "TROUBLESHOOTING:", true},
+		{"Comments in YAML", "# Zoom Account ID from Server-to-Server OAuth app", true},
+		{"File format examples", "john.doe@company.com", true},
+		{"Default values", "(default:", true},
+	}
+	
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.required && !strings.Contains(output, test.content) {
+				t.Errorf("Expected config help to contain %q", test.content)
+			}
+		})
+	}
+}
+
+// TestConfigCommandSections tests that all major sections are present in config help
+func TestConfigCommandSections(t *testing.T) {
+	cmd := createRootCommand()
+	
+	// Capture output
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	
+	// Execute config command
+	cmd.SetArgs([]string{"config"})
+	err := cmd.Execute()
+	
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+	
+	output := buf.String()
+	
+	// Verify that major sections appear in the expected order
+	sections := []string{
+		"ZOOM API CONFIGURATION (Required):",
+		"DOWNLOAD CONFIGURATION:",
+		"LOGGING CONFIGURATION:",
+		"BOX INTEGRATION (Optional):",
+		"ACTIVE USERS FILTERING (Optional):",
+		"ENVIRONMENT VARIABLES:",
+		"AUTHENTICATION METHODS:",
+		"EXAMPLE USAGE:",
+		"DIRECTORY STRUCTURE:",
+		"TROUBLESHOOTING:",
+	}
+	
+	lastIndex := -1
+	for i, section := range sections {
+		index := strings.Index(output, section)
+		if index == -1 {
+			t.Errorf("Section %d (%q) not found in config help", i, section)
+			continue
+		}
+		if index <= lastIndex {
+			t.Errorf("Section %d (%q) appears out of order (index %d vs previous %d)", i, section, index, lastIndex)
+		}
+		lastIndex = index
 	}
 }
 
