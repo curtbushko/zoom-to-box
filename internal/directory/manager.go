@@ -87,8 +87,9 @@ func NewDirectoryManager(config DirectoryConfig, activeUserManager users.ActiveU
 }
 
 // GenerateDirectory generates a directory structure based on user email and meeting date
+// userEmail should be the Zoom email, but the directory will be created using the Box email
 func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate time.Time) (*DirectoryResult, error) {
-	// Validate user email
+	// Validate user email (this is the Zoom email)
 	if userEmail == "" {
 		return nil, fmt.Errorf("user email cannot be empty")
 	}
@@ -102,13 +103,23 @@ func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate 
 		return nil, fmt.Errorf("user not in active users list: %s", userEmail)
 	}
 
+	// Get user mapping to find the Box email for directory creation
+	var boxEmail string
+	if mapping, exists := dm.activeUserManager.GetUserMapping(userEmail); exists {
+		// Use Box email from mapping
+		boxEmail = mapping.BoxEmail
+	} else {
+		// Fallback to Zoom email if no mapping exists
+		boxEmail = userEmail
+	}
+
 	// Validate base directory
 	if dm.config.BaseDirectory == "" {
 		return nil, fmt.Errorf("base directory cannot be empty")
 	}
 
-	// Sanitize user email for directory name
-	userDir := sanitizeEmailForDirectory(userEmail)
+	// Sanitize Box email for directory name (use Box email for folder structure)
+	userDir := sanitizeEmailForDirectory(boxEmail)
 	
 	// Convert meeting date to UTC for consistent directory structure
 	utcDate := meetingDate.UTC()

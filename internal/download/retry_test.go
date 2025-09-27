@@ -4,6 +4,7 @@ package download
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -517,4 +518,82 @@ func TestCircuitBreakerIntegration(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected success after recovery timeout, got %v", err)
 	}
+}
+
+// TestRetryUncoveredFunctions tests functions with 0% coverage
+func TestRetryUncoveredFunctions(t *testing.T) {
+	t.Run("DefaultRetryConfig", func(t *testing.T) {
+		config := DefaultRetryConfig()
+		if config.MaxAttempts <= 0 {
+			t.Error("DefaultRetryConfig should have MaxAttempts > 0")
+		}
+		if config.BaseDelay <= 0 {
+			t.Error("DefaultRetryConfig should have BaseDelay > 0")
+		}
+		if config.MaxDelay <= 0 {
+			t.Error("DefaultRetryConfig should have MaxDelay > 0")
+		}
+		if config.Multiplier <= 1.0 {
+			t.Error("DefaultRetryConfig should have Multiplier > 1.0")
+		}
+	})
+
+	t.Run("RetryExecutor GetAttemptCount", func(t *testing.T) {
+		executor := NewRetryExecutor(NewRetryStrategy(DefaultRetryConfig()))
+		
+		// Initially should be 0
+		if executor.GetAttemptCount() != 0 {
+			t.Errorf("Expected 0 attempts initially, got %d", executor.GetAttemptCount())
+		}
+
+		// Execute a function and check attempt count
+		executor.Execute(context.Background(), func() error {
+			return nil // Success on first try
+		})
+
+		if executor.GetAttemptCount() != 1 {
+			t.Errorf("Expected 1 attempt after success, got %d", executor.GetAttemptCount())
+		}
+	})
+
+	t.Run("RetryExecutor Reset", func(t *testing.T) {
+		executor := NewRetryExecutor(NewRetryStrategy(DefaultRetryConfig()))
+		
+		// Execute to increment counter
+		executor.Execute(context.Background(), func() error {
+			return nil
+		})
+
+		// Reset should clear attempt count
+		executor.Reset()
+		if executor.GetAttemptCount() != 0 {
+			t.Errorf("Expected 0 attempts after reset, got %d", executor.GetAttemptCount())
+		}
+	})
+
+	t.Run("CircuitBreaker Reset", func(t *testing.T) {
+		config := DefaultRetryConfig()
+		config.CircuitBreaker = true
+		strategy := NewRetryStrategy(config)
+		executor := NewRetryExecutor(strategy)
+
+		// Trigger circuit breaker by causing multiple failures
+		for i := 0; i < config.FailureThreshold; i++ {
+			executor.Execute(context.Background(), func() error {
+				return fmt.Errorf("failure")
+			})
+		}
+
+		// Circuit should be open now
+		// Reset should close the circuit
+		executor.Reset()
+		
+		// Should be able to execute again after reset
+		err := executor.Execute(context.Background(), func() error {
+			return nil
+		})
+		if err != nil {
+			t.Errorf("Expected success after circuit breaker reset, got %v", err)
+		}
+	})
 }

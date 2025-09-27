@@ -1365,7 +1365,96 @@ internal/
 - [ ] Verify mock server accuracy
 - [ ] Performance benchmarks for large files
 
-### Feature 5.2: Integration Testing
+### Feature 5.2: Single User Processing with Email Mapping
+- [ ] Add `--zoom-user` flag to specify individual Zoom user email for processing
+- [ ] Add `--box-user` flag to specify corresponding Box user email for uploads
+- [ ] Support different email addresses between Zoom and Box systems
+- [ ] Modify active user list to support Zoom-to-Box email mapping
+- [ ] Update directory manager to use Box email for folder structure
+- [ ] Update upload manager to use Box email for permissions
+**CLI Usage Examples:**
+```bash
+# Process single user with same email in both systems
+./zoom-to-box --zoom-user=john.doe@company.com --box-user=john.doe@company.com
+
+# Process single user with different emails
+./zoom-to-box --zoom-user=john.doe@zoomaccount.com --box-user=john.doe@company.com
+
+# Combined with other flags
+./zoom-to-box --zoom-user=john.doe@zoomaccount.com --box-user=john.doe@company.com --limit=10 --meta-only
+```
+
+**Active User List Enhancement (active_users.txt):**
+```
+# Format: zoom_email,box_email (or just zoom_email if same)
+john.doe@zoomaccount.com,john.doe@company.com
+jane.smith@company.com
+admin@zoomaccount.com,admin@company.com
+# Lines starting with # are comments
+# If no comma separator, same email used for both Zoom and Box
+user@example.org
+```
+
+**Email Mapping Logic:**
+- When `--zoom-user` and `--box-user` flags are provided, process only that user mapping
+- Override active user list when single user flags are used
+- Zoom email used for API calls and local directory structure
+- Box email used for Box folder structure and permissions
+- Support validation that both emails are properly formatted
+
+**Directory Structure with Email Mapping:**
+```
+downloads/
+├── john.doe/  # Box email username for local folders
+│   └── 2024/
+│       └── 01/
+│           └── 15/
+│               ├── team-standup-meeting-1000.mp4
+│               └── team-standup-meeting-1000.json
+box/
+├── john.doe/  # Box email username for Box folders  
+│   └── 2024/
+│       └── 01/
+│           └── 15/
+│               ├── team-standup-meeting-1000.mp4
+│               └── team-standup-meeting-1000.json
+```
+
+**Implementation Tasks:**
+- [ ] Add zoom-user and box-user flags to CLI with validation
+- [ ] Extend UserManager to support email mapping format
+- [ ] Update DirectoryManager to use Box email for folder names
+- [ ] Update UploadManager to use Box email for permissions
+- [ ] Add email validation for both Zoom and Box email formats
+- [ ] Update status file to track both Zoom and Box email addresses
+- [ ] Add single user mode that bypasses active user list checking
+
+**Tests:**
+- [ ] Test CLI flag parsing and validation for zoom-user and box-user
+- [ ] Test active user list parsing with comma-separated email mapping
+- [ ] Test directory creation using Box email for folder names
+- [ ] Test Box permission setting using Box email address
+- [ ] Test single user mode bypassing active user list
+- [ ] Test email validation for both systems
+- [ ] Test error handling for mismatched or invalid email addresses
+- [ ] Test integration with existing limit and meta-only flags
+
+**Configuration Integration:**
+- Single user flags override active_users.file setting
+- Box email used for all Box operations and local folder structure
+- Zoom email used for Zoom API calls and metadata
+- Status file tracks both email addresses for proper resume functionality
+
+**Verification Commands:**
+```bash
+go test ./cmd/zoom-to-box -v -run TestSingleUser     # Test CLI single user flags
+go test ./internal/users -v -run TestEmailMapping   # Test email mapping support
+go test ./internal/directory -v                     # Test Box email directory creation
+go test ./internal/box -v                          # Test Box permission with Box email
+make build && make test && make vet                 # Run all quality gates
+```
+
+### Feature 5.3: Integration Testing
 - [ ] End-to-end testing with real API interactions
 - [ ] Docker-based test environment
 - [ ] Test data cleanup and isolation
@@ -1383,7 +1472,7 @@ internal/
 - [ ] Performance testing with large datasets
 
 
-### Feature 5.3: Documentation and Examples
+### Feature 5.4: Documentation and Examples
 - [ ] Comprehensive README with setup instructions
 - [ ] API documentation with examples
 - [ ] Configuration guide for different scenarios

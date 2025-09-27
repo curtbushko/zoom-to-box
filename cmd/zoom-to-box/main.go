@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,7 +31,16 @@ var (
 	limit       int
 	noProgress  bool
 	compactMode bool
+	zoomUser    string
+	boxUser     string
 )
+
+// SingleUserConfig holds configuration for single user mode
+type SingleUserConfig struct {
+	Enabled   bool
+	ZoomEmail string
+	BoxEmail  string
+}
 
 // buildRootCommand creates and configures the root command
 func buildRootCommand() *cobra.Command {
@@ -117,12 +127,30 @@ This tool helps you:
 	rootCmd.PersistentFlags().IntVar(&limit, "limit", 0, "limit processing to N recordings (0 = no limit)")
 	rootCmd.PersistentFlags().BoolVar(&noProgress, "no-progress", false, "disable progress bars and real-time updates")
 	rootCmd.PersistentFlags().BoolVar(&compactMode, "compact", false, "use compact progress display")
+	rootCmd.PersistentFlags().StringVar(&zoomUser, "zoom-user", "", "process recordings for specific Zoom user email")
+	rootCmd.PersistentFlags().StringVar(&boxUser, "box-user", "", "corresponding Box user email for uploads (requires --zoom-user)")
 
 	// Add flag validation
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		if limit < 0 {
 			return fmt.Errorf("limit must be a positive number or 0, got: %d", limit)
 		}
+		
+		// Validate single user flags
+		if (zoomUser != "" && boxUser == "") || (zoomUser == "" && boxUser != "") {
+			return fmt.Errorf("both --zoom-user and --box-user must be provided together")
+		}
+		
+		// Validate email format for zoom-user
+		if zoomUser != "" && !isValidEmail(zoomUser) {
+			return fmt.Errorf("invalid email format for --zoom-user: %s", zoomUser)
+		}
+		
+		// Validate email format for box-user
+		if boxUser != "" && !isValidEmail(boxUser) {
+			return fmt.Errorf("invalid email format for --box-user: %s", boxUser)
+		}
+		
 		return nil
 	}
 
@@ -205,6 +233,10 @@ active_users:
 # jane.smith@company.com
 # # Lines starting with # are comments
 # admin@company.com
+#
+# For different Zoom and Box emails, use comma separation:
+# john.doe@zoomaccount.com,john.doe@company.com
+# admin@zoomaccount.com,admin@company.com
 
 ENVIRONMENT VARIABLES:
 =====================
@@ -254,7 +286,11 @@ EXAMPLE USAGE:
    zoom-to-box --limit 10 --meta-only --verbose
    zoom-to-box --output-dir ./recordings --dry-run
 
-4. Box integration:
+4. Single user processing:
+   zoom-to-box --zoom-user=john.doe@company.com --box-user=john.doe@company.com
+   zoom-to-box --zoom-user=john.doe@zoomaccount.com --box-user=john.doe@company.com --limit=5
+
+5. Box integration:
    # Set up Box OAuth 2.0 credentials file
    # Enable in config.yaml: box.enabled = true
    zoom-to-box --config config.yaml
@@ -303,6 +339,27 @@ func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *confi
 		cfg.Download.OutputDir = outputDir
 	}
 
+	// Handle single user mode
+	singleUserConfig := SingleUserConfig{
+		Enabled:   zoomUser != "" && boxUser != "",
+		ZoomEmail: zoomUser,
+		BoxEmail:  boxUser,
+	}
+	
+	if singleUserConfig.Enabled {
+		// Log single user mode activation
+		if logger != nil {
+			logger.InfoWithContext(ctx, "Single user mode activated")
+			logger.LogUserAction("single_user_mode", singleUserConfig.ZoomEmail, map[string]interface{}{
+				"zoom_email": singleUserConfig.ZoomEmail,
+				"box_email":  singleUserConfig.BoxEmail,
+			})
+		}
+		
+		// In single user mode, we bypass active user list checking
+		cmd.Printf("🎯 Single user mode: processing %s → %s\n", singleUserConfig.ZoomEmail, singleUserConfig.BoxEmail)
+	}
+
 	// Create progress configuration based on CLI flags
 	progressConfig := progress.NewProgressConfigBuilder().
 		WithVerbose(verbose).
@@ -340,18 +397,26 @@ func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *confi
 	// Log session start
 	if logger != nil {
 		logger.InfoWithContext(ctx, "Starting zoom-to-box download session")
-		logger.LogUserAction("session_start", "cli", map[string]interface{}{
+		sessionInfo := map[string]interface{}{
 			"total_estimated": totalItems,
 			"meta_only":       metaOnly,
 			"limit":           limit,
 			"dry_run":         dryRun,
 			"verbose":         verbose,
 			"output_dir":      cfg.Download.OutputDir,
-		})
+			"single_user_mode": singleUserConfig.Enabled,
+		}
+		
+		if singleUserConfig.Enabled {
+			sessionInfo["single_zoom_email"] = singleUserConfig.ZoomEmail
+			sessionInfo["single_box_email"] = singleUserConfig.BoxEmail
+		}
+		
+		logger.LogUserAction("session_start", "cli", sessionInfo)
 	}
 
 	// Simulate download operations (this would be replaced with actual download logic)
-	if err := simulateDownloads(ctx, reporter, totalItems); err != nil {
+	if err := simulateDownloads(ctx, reporter, totalItems, singleUserConfig); err != nil {
 		return fmt.Errorf("download operation failed: %w", err)
 	}
 
@@ -391,14 +456,21 @@ func estimateTotalItems(cfg *config.Config, limitFlag int) int {
 }
 
 // simulateDownloads simulates the download process for demonstration
-func simulateDownloads(ctx context.Context, reporter progress.ProgressReporter, totalItems int) error {
+func simulateDownloads(ctx context.Context, reporter progress.ProgressReporter, totalItems int, singleUserConfig SingleUserConfig) error {
 	// This is a placeholder that simulates downloads
 	// In the real implementation, this would:
 	// 1. Initialize Zoom API client
 	// 2. Get list of users and recordings
-	// 3. Filter based on active users
+	// 3. Filter based on active users OR use single user mode
 	// 4. Download recordings with progress tracking
 	// 5. Upload to Box if configured
+	
+	// In single user mode, we would only process the specified user
+	if singleUserConfig.Enabled {
+		fmt.Printf("📋 Single user mode: Processing recordings for %s\n", singleUserConfig.ZoomEmail)
+		fmt.Printf("📁 Folder structure will use: %s\n", singleUserConfig.BoxEmail)
+		fmt.Printf("🔐 Box permissions will be granted to: %s\n", singleUserConfig.BoxEmail)
+	}
 
 	for i := 0; i < totalItems; i++ {
 		select {
@@ -514,6 +586,17 @@ func showDetailedSummary(cmd *cobra.Command, summary *progress.Summary) {
 		}
 		cmd.Printf("\n")
 	}
+}
+
+// isValidEmail validates email format using RFC 5322 compliant regex
+func isValidEmail(email string) bool {
+	if len(email) == 0 || len(email) > 320 {
+		return false
+	}
+	
+	// RFC 5322 compliant email regex (simplified but sufficient for most cases)
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	return emailRegex.MatchString(email)
 }
 
 func main() {

@@ -16,11 +16,15 @@ import (
 // UploadManager defines the interface for Box upload operations
 type UploadManager interface {
 	// Upload operations
+	// videoOwner should be the Box email address for proper permission management
 	UploadFile(ctx context.Context, localPath, videoOwner, downloadID string) (*UploadResult, error)
 	UploadFileWithProgress(ctx context.Context, localPath, videoOwner, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error)
 	
 	// Resume operations
 	UploadWithResume(ctx context.Context, localPath, videoOwner, downloadID string, statusTracker download.StatusTracker) (*UploadResult, error)
+	
+	// Email mapping support - upload using separate Zoom and Box emails
+	UploadFileWithEmailMapping(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error)
 	
 	// Bulk operations
 	UploadPendingFiles(ctx context.Context, statusTracker download.StatusTracker) (*UploadSummary, error)
@@ -208,6 +212,123 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 	}
 	
 	logging.LogUserAction("box_upload_completed", videoOwner, map[string]interface{}{
+		"file_id":         result.FileID,
+		"file_name":       result.FileName,
+		"file_size":       result.FileSize,
+		"folder_id":       result.FolderID,
+		"permissions_set": result.PermissionsSet,
+		"duration_ms":     result.Duration.Milliseconds(),
+	})
+	
+	return result, nil
+}
+
+// UploadFileWithEmailMapping uploads a file using separate Zoom and Box emails
+// zoomEmail is used for logging/metadata, boxEmail is used for Box folder structure and permissions
+func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error) {
+	startTime := time.Now()
+	
+	result := &UploadResult{
+		FileName:   filepath.Base(localPath),
+		UploadDate: startTime,
+	}
+	
+	// Validate both emails
+	if zoomEmail == "" {
+		err := fmt.Errorf("zoom email cannot be empty")
+		result.Error = err
+		return result, err
+	}
+	if boxEmail == "" {
+		err := fmt.Errorf("box email cannot be empty")
+		result.Error = err
+		return result, err
+	}
+	
+	// Extract username from Box email for folder structure
+	username := extractUsernameFromEmail(boxEmail)
+	if username == "" {
+		err := fmt.Errorf("invalid box email: %s", boxEmail)
+		result.Error = err
+		return result, err
+	}
+	
+	// Create folder structure: <box_username>/<year>/<month>/<day>
+	folderPath := createDateBasedFolderPath(username, startTime)
+	
+	// Report progress - creating folders
+	if progressCallback != nil {
+		progressCallback(0, 0, PhaseCreatingFolders)
+	}
+	
+	// Create folder structure with Box user permissions
+	folder, err := um.createFolderStructureWithPermissions(ctx, folderPath, boxEmail)
+	if err != nil {
+		err = fmt.Errorf("failed to create folder structure for box email %s: %w", boxEmail, err)
+		result.Error = err
+		if progressCallback != nil {
+			progressCallback(0, 0, PhaseFailed)
+		}
+		return result, err
+	}
+	
+	result.FolderID = folder.ID
+	
+	// Report progress - uploading file
+	if progressCallback != nil {
+		progressCallback(0, 0, PhaseUploadingFile)
+	}
+	
+	// Create upload progress callback
+	var uploadProgressCallback ProgressCallback
+	if progressCallback != nil {
+		uploadProgressCallback = func(uploaded, total int64) {
+			progressCallback(uploaded, total, PhaseUploadingFile)
+		}
+	}
+	
+	// Upload the file
+	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
+	if err != nil {
+		err = fmt.Errorf("failed to upload file: %w", err)
+		result.Error = err
+		if progressCallback != nil {
+			progressCallback(0, 0, PhaseFailed)
+		}
+		return result, err
+	}
+	
+	result.FileID = file.ID
+	result.FileSize = file.Size
+	result.Success = true
+	
+	// Report progress - setting permissions
+	if progressCallback != nil {
+		progressCallback(result.FileSize, result.FileSize, PhaseSettingPermissions)
+	}
+	
+	// Set permissions for the uploaded file using Box email
+	permissionIDs, err := um.setFilePermissions(ctx, file.ID, boxEmail)
+	if err != nil {
+		// Log warning but don't fail the upload
+		logging.Warn("Failed to set permissions for file %s (box email: %s): %v", file.ID, boxEmail, err)
+		result.PermissionsSet = false
+	} else {
+		result.PermissionsSet = true
+		result.PermissionIDs = permissionIDs
+	}
+	
+	result.Duration = time.Since(startTime)
+	
+	// Report progress - completed
+	if progressCallback != nil {
+		progressCallback(result.FileSize, result.FileSize, PhaseCompleted)
+	}
+	
+	// Log using both emails for context
+	logging.LogUserAction("box_upload_completed_with_mapping", zoomEmail, map[string]interface{}{
+		"zoom_email":      zoomEmail,
+		"box_email":       boxEmail,
 		"file_id":         result.FileID,
 		"file_name":       result.FileName,
 		"file_size":       result.FileSize,

@@ -114,7 +114,7 @@ func TestCreateFolderPathWithPermissions(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			folder, err := CreateFolderPathWithPermissions(client, tt.folderPath, tt.parentID, tt.userPermissions)
 
@@ -235,7 +235,7 @@ func TestFindFolderByPath(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			folder, err := FindFolderByPath(client, tt.folderPath, tt.parentID)
 
@@ -321,7 +321,7 @@ func TestEnsureUserFolderWithPermissions(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			folder, err := EnsureUserFolderWithPermissions(client, tt.username, tt.userEmail, tt.baseFolderID)
 
@@ -403,7 +403,7 @@ func TestSetFolderPermissions(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			err := SetFolderPermissions(client, tt.folderID, tt.userPermissions)
 
@@ -477,7 +477,7 @@ func TestGetFolderPermissions(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			permissions, err := GetFolderPermissions(client, tt.folderID)
 
@@ -579,7 +579,7 @@ func TestRemoveFolderPermissions(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			err := RemoveFolderPermissions(client, tt.folderID, tt.userEmails)
 
@@ -644,7 +644,7 @@ func TestValidateFolderStructure(t *testing.T) {
 			server := createMockBoxServer(tt.serverResponses)
 			defer server.Close()
 
-			client := createTestBoxClient(server.URL)
+			client := createTestBoxClient(tt.serverResponses)
 
 			err := ValidateFolderStructure(client, tt.folderPath, tt.parentID)
 
@@ -692,9 +692,39 @@ func createMockBoxServer(responses map[string]string) *httptest.Server {
 	}))
 }
 
-func createTestBoxClient(baseURL string) BoxClient {
-	// For folder management tests, we'll use a simpler approach with the existing mock client from upload tests
-	return newMockBoxClient()
+func createTestBoxClient(responses map[string]string) BoxClient {
+	// Create a mock client using the pattern from client_test.go
+	mockClient := newMockAuthenticatedHTTPClient()
+	for path, responseBody := range responses {
+		// Parse "METHOD /path" format
+		parts := strings.SplitN(path, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		method := parts[0]
+		url := parts[1]
+		
+		// Convert relative paths to full URLs
+		if !strings.HasPrefix(url, "http") {
+			if strings.HasPrefix(url, "/2.0") {
+				// URL already has /2.0, so use base domain only
+				url = "https://api.box.com" + url
+			} else {
+				url = BoxAPIBaseURL + url
+			}
+		}
+		
+		statusCode := http.StatusOK
+		if method == "POST" {
+			statusCode = http.StatusCreated
+		}
+		
+		// Debug print to see what URLs we're setting up
+		// fmt.Printf("Setting up mock response: %s %s -> %d\n", method, url, statusCode)
+		
+		mockClient.setResponse(method, url, statusCode, responseBody)
+	}
+	return &boxClient{httpClient: mockClient}
 }
 
 // testAuthenticator is a simple authenticator for testing

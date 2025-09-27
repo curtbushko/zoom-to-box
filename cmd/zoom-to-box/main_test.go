@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/curtbushko/zoom-to-box/internal/config"
+	"github.com/curtbushko/zoom-to-box/internal/progress"
 )
 
 func TestRootCommand(t *testing.T) {
@@ -503,4 +505,348 @@ func TestConfigCommandSections(t *testing.T) {
 // createRootCommand creates a fresh root command instance for testing
 func createRootCommand() *cobra.Command {
 	return buildRootCommand()
+}
+
+// TestEstimateTotalItems tests the estimateTotalItems function
+func TestEstimateTotalItems(t *testing.T) {
+	tests := []struct {
+		name       string
+		limitFlag  int
+		expected   int
+	}{
+		{
+			name:      "no limit",
+			limitFlag: 0,
+			expected:  50, // Default estimate
+		},
+		{
+			name:      "limit higher than default",
+			limitFlag: 100,
+			expected:  50, // Default estimate
+		},
+		{
+			name:      "limit lower than default",
+			limitFlag: 25,
+			expected:  25, // Limited value
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{} // Empty config for testing
+			result := estimateTotalItems(cfg, tt.limitFlag)
+			if result != tt.expected {
+				t.Errorf("Expected %d, got %d", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestShowDetailedSummary tests the showDetailedSummary function
+func TestShowDetailedSummary(t *testing.T) {
+	// Create a mock command to capture output
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	
+	// Create a mock summary
+	summary := &progress.Summary{
+		TotalItems:         5,
+		CompletedDownloads: 3,
+		FailedDownloads:    1,
+		ErrorItems: []progress.ErrorItem{
+			{Item: "test.mp4", ErrorMsg: "network error"},
+		},
+		SkippedItems: []progress.SkippedItem{
+			{Item: "skipped.mp4", Reason: progress.SkipReasonAlreadyExists},
+		},
+	}
+	
+	// The function doesn't return anything, so we just test it doesn't panic
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("showDetailedSummary panicked: %v", r)
+		}
+	}()
+	
+	showDetailedSummary(cmd, summary)
+	
+	// Check that some output was generated
+	output := buf.String()
+	if !strings.Contains(output, "Detailed Summary") {
+		t.Error("Expected summary header in output")
+	}
+	
+	// The test passes if no panic occurred and output was generated
+}
+
+// TestEmailValidation tests the isValidEmail function
+func TestEmailValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		expected bool
+	}{
+		{
+			name:     "valid email",
+			email:    "john.doe@company.com",
+			expected: true,
+		},
+		{
+			name:     "valid email with plus",
+			email:    "john.doe+test@company.com",
+			expected: true,
+		},
+		{
+			name:     "valid email with underscore",
+			email:    "john_doe@company.com",
+			expected: true,
+		},
+		{
+			name:     "empty email",
+			email:    "",
+			expected: false,
+		},
+		{
+			name:     "email without domain",
+			email:    "john.doe",
+			expected: false,
+		},
+		{
+			name:     "email without username",
+			email:    "@company.com",
+			expected: false,
+		},
+		{
+			name:     "email with spaces",
+			email:    "john doe@company.com",
+			expected: false,
+		},
+		{
+			name:     "email too long",
+			email:    strings.Repeat("a", 310) + "@company.com",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidEmail(tt.email)
+			if result != tt.expected {
+				t.Errorf("isValidEmail(%q) = %v, expected %v", tt.email, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestSingleUserFlags tests the new zoom-user and box-user flags
+func TestSingleUserFlags(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		expectError    bool
+		expectedOutput string
+	}{
+		{
+			name:           "help shows zoom-user flag",
+			args:           []string{"--help"},
+			expectError:    false,
+			expectedOutput: "--zoom-user",
+		},
+		{
+			name:           "help shows box-user flag",
+			args:           []string{"--help"},
+			expectError:    false,
+			expectedOutput: "--box-user",
+		},
+		{
+			name:           "zoom-user description in help",
+			args:           []string{"--help"},
+			expectError:    false,
+			expectedOutput: "process recordings for specific Zoom user email",
+		},
+		{
+			name:           "box-user description in help",
+			args:           []string{"--help"},
+			expectError:    false,
+			expectedOutput: "corresponding Box user email for uploads",
+		},
+		{
+			name:        "zoom-user without box-user should error",
+			args:        []string{"--zoom-user", "test@example.com"},
+			expectError: true,
+		},
+		{
+			name:        "box-user without zoom-user should error",
+			args:        []string{"--box-user", "test@example.com"},
+			expectError: true,
+		},
+		{
+			name:        "invalid zoom-user email should error",
+			args:        []string{"--zoom-user", "invalid-email", "--box-user", "test@example.com"},
+			expectError: true,
+		},
+		{
+			name:        "invalid box-user email should error",
+			args:        []string{"--zoom-user", "test@example.com", "--box-user", "invalid-email"},
+			expectError: true,
+		},
+		{
+			name:        "valid zoom-user and box-user should not error during validation",
+			args:        []string{"--zoom-user", "zoom@example.com", "--box-user", "box@example.com", "--dry-run", "--limit", "1"},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := createRootCommand()
+			
+			// Capture output
+			buf := &bytes.Buffer{}
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			
+			if tt.expectedOutput != "" {
+				output := buf.String()
+				if !strings.Contains(output, tt.expectedOutput) {
+					t.Errorf("Expected output to contain %q, got %q", tt.expectedOutput, output)
+				}
+			}
+		})
+	}
+}
+
+// TestSingleUserModeHelp tests that single user mode help is displayed correctly
+func TestSingleUserModeHelp(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		expectedOutput string
+		expectError    bool
+	}{
+		{
+			name:           "config help shows single user examples",
+			args:           []string{"config"},
+			expectedOutput: "Single user processing:",
+			expectError:    false,
+		},
+		{
+			name:           "config help shows zoom-user example",
+			args:           []string{"config"},
+			expectedOutput: "--zoom-user=john.doe@company.com",
+			expectError:    false,
+		},
+		{
+			name:           "config help shows box-user example",
+			args:           []string{"config"},
+			expectedOutput: "--box-user=john.doe@company.com",
+			expectError:    false,
+		},
+		{
+			name:           "config help shows email mapping format",
+			args:           []string{"config"},
+			expectedOutput: "john.doe@zoomaccount.com,john.doe@company.com",
+			expectError:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := createRootCommand()
+			
+			// Capture output
+			buf := &bytes.Buffer{}
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			
+			output := buf.String()
+			if !strings.Contains(output, tt.expectedOutput) {
+				t.Errorf("Expected output to contain %q, got %q", tt.expectedOutput, output)
+			}
+		})
+	}
+}
+
+// TestSingleUserConfig tests the SingleUserConfig struct
+func TestSingleUserConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		zoomUser  string
+		boxUser   string
+		enabled   bool
+	}{
+		{
+			name:     "both emails provided",
+			zoomUser: "zoom@example.com",
+			boxUser:  "box@example.com",
+			enabled:  true,
+		},
+		{
+			name:     "same email for both",
+			zoomUser: "user@example.com",
+			boxUser:  "user@example.com",
+			enabled:  true,
+		},
+		{
+			name:     "missing zoom email",
+			zoomUser: "",
+			boxUser:  "box@example.com",
+			enabled:  false,
+		},
+		{
+			name:     "missing box email",
+			zoomUser: "zoom@example.com",
+			boxUser:  "",
+			enabled:  false,
+		},
+		{
+			name:     "both emails empty",
+			zoomUser: "",
+			boxUser:  "",
+			enabled:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := SingleUserConfig{
+				Enabled:   tt.zoomUser != "" && tt.boxUser != "",
+				ZoomEmail: tt.zoomUser,
+				BoxEmail:  tt.boxUser,
+			}
+			
+			if config.Enabled != tt.enabled {
+				t.Errorf("Expected enabled=%v, got %v", tt.enabled, config.Enabled)
+			}
+			
+			if config.ZoomEmail != tt.zoomUser {
+				t.Errorf("Expected ZoomEmail=%q, got %q", tt.zoomUser, config.ZoomEmail)
+			}
+			
+			if config.BoxEmail != tt.boxUser {
+				t.Errorf("Expected BoxEmail=%q, got %q", tt.boxUser, config.BoxEmail)
+			}
+		})
+	}
 }

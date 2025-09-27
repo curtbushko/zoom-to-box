@@ -871,3 +871,101 @@ func TestNeedsChecksumVerification(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusUncoveredFunctions tests functions with 0% coverage
+func TestStatusUncoveredFunctions(t *testing.T) {
+	tempDir := t.TempDir()
+	tracker, err := NewStatusTracker(filepath.Join(tempDir, "test_status.json"))
+	if err != nil {
+		t.Fatalf("Failed to create status tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	t.Run("GetIncompleteDownloads", func(t *testing.T) {
+		// Add some test entries
+		entry1 := CreateDownloadEntry(DownloadRequest{
+			URL:         "http://example.com/file1.mp4",
+			Destination: "file1.mp4",
+		}, StatusPending)
+		entry2 := CreateDownloadEntry(DownloadRequest{
+			URL:         "http://example.com/file2.mp4", 
+			Destination: "file2.mp4",
+		}, StatusCompleted)
+
+		tracker.UpdateDownloadStatus("id1", entry1)
+		tracker.UpdateDownloadStatus("id2", entry2)
+
+		incomplete := tracker.GetIncompleteDownloads()
+		if len(incomplete) != 1 {
+			t.Errorf("Expected 1 incomplete download, got %d", len(incomplete))
+		}
+		// Find the incomplete download (it should be the pending one)
+		var foundIncomplete DownloadEntry
+		for _, entry := range incomplete {
+			if entry.Status == StatusPending {
+				foundIncomplete = entry
+				break
+			}
+		}
+		if foundIncomplete.FilePath == "" {
+			t.Error("Expected to find pending download in incomplete list")
+		}
+	})
+
+	t.Run("VerifyFileChecksum", func(t *testing.T) {
+		// Create a test file
+		testFile := filepath.Join(tempDir, "test.txt")
+		content := "test content"
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+
+		// Calculate expected checksum
+		expected, err := CalculateFileChecksum(testFile)
+		if err != nil {
+			t.Fatalf("Failed to calculate checksum: %v", err)
+		}
+
+		// Verify with correct checksum
+		valid, err := VerifyFileChecksum(testFile, expected)
+		if err != nil {
+			t.Errorf("VerifyFileChecksum failed: %v", err)
+		}
+		if !valid {
+			t.Error("Expected checksum to be valid")
+		}
+
+		// Verify with incorrect checksum
+		valid, err = VerifyFileChecksum(testFile, "wrong_checksum")
+		if err != nil {
+			t.Errorf("VerifyFileChecksum failed: %v", err)
+		}
+		if valid {
+			t.Error("Expected checksum to be invalid")
+		}
+	})
+
+	t.Run("GetDownloadStatus with return values", func(t *testing.T) {
+		req := DownloadRequest{
+			URL:         "http://example.com/test.mp4",
+			Destination: "test.mp4",
+		}
+		entry := CreateDownloadEntry(req, StatusCompleted)
+		tracker.UpdateDownloadStatus("test_id", entry)
+
+		// Test GetDownloadStatus returns both entry and bool
+		retrievedEntry, exists := tracker.GetDownloadStatus("test_id")
+		if !exists {
+			t.Error("Expected entry to exist")
+		}
+		if retrievedEntry.FilePath != req.Destination {
+			t.Errorf("Expected FilePath %s, got %s", req.Destination, retrievedEntry.FilePath)
+		}
+
+		// Test non-existent entry
+		_, exists = tracker.GetDownloadStatus("nonexistent")
+		if exists {
+			t.Error("Expected entry to not exist")
+		}
+	})
+}

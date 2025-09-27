@@ -51,7 +51,8 @@ type DownloadEntry struct {
 	StartTime          time.Time              `json:"start_time,omitempty"`
 	CompletedTime      time.Time              `json:"completed_time,omitempty"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty"`
-	VideoOwner         string                 `json:"video_owner,omitempty"`
+	VideoOwner         string                 `json:"video_owner,omitempty"`         // Zoom email of the video owner
+	BoxUser            string                 `json:"box_user,omitempty"`            // Box email for folder structure and permissions
 	Box                *BoxUploadInfo         `json:"box,omitempty"`
 }
 
@@ -395,6 +396,27 @@ func CreateDownloadEntry(req DownloadRequest, status DownloadStatusType) Downloa
 		StartTime:          time.Now().UTC(),
 		Metadata:           req.Metadata,
 	}
+}
+
+// CreateDownloadEntryWithEmailMapping creates a new download entry with separate Zoom and Box emails
+func CreateDownloadEntryWithEmailMapping(req DownloadRequest, status DownloadStatusType, zoomEmail, boxEmail string) DownloadEntry {
+	entry := CreateDownloadEntry(req, status)
+	entry.VideoOwner = zoomEmail // Zoom email for the video owner
+	entry.BoxUser = boxEmail     // Box email for folder structure and permissions
+	return entry
+}
+
+// GetBoxEmailForEntry returns the Box email for an entry, falling back to VideoOwner if BoxUser is not set
+func GetBoxEmailForEntry(entry DownloadEntry) string {
+	if entry.BoxUser != "" {
+		return entry.BoxUser
+	}
+	return entry.VideoOwner // Fallback to Zoom email for backward compatibility
+}
+
+// GetZoomEmailForEntry returns the Zoom email for an entry
+func GetZoomEmailForEntry(entry DownloadEntry) string {
+	return entry.VideoOwner
 }
 
 // UpdateFromProgressUpdate updates a download entry from a ProgressUpdate
