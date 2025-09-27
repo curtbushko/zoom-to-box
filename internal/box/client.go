@@ -332,6 +332,132 @@ func (c *boxClient) DeleteFile(fileID string) error {
 	return nil
 }
 
+// Permission management methods
+
+func (c *boxClient) CreateCollaboration(itemID, itemType, userEmail, role string) (*Collaboration, error) {
+	if itemID == "" {
+		return nil, fmt.Errorf("item ID cannot be empty")
+	}
+	if userEmail == "" {
+		return nil, fmt.Errorf("user email cannot be empty")
+	}
+	if role == "" {
+		role = RoleViewer // Default to viewer role
+	}
+
+	request := CreateCollaborationRequest{
+		Item: ItemReference{
+			ID:   itemID,
+			Type: itemType,
+		},
+		AccessibleBy: UserReference{
+			Login: userEmail,
+			Type:  "user",
+		},
+		Role:        role,
+		CanViewPath: false, // Restrict view path access for privacy
+	}
+
+	url := fmt.Sprintf("%s/collaborations", BoxAPIBaseURL)
+	resp, err := c.httpClient.PostJSON(context.Background(), url, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create collaboration: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNameTaken,
+			Message:    fmt.Sprintf("collaboration already exists for user %s on item %s", userEmail, itemID),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create collaboration, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var collaboration Collaboration
+	if err := json.NewDecoder(resp.Body).Decode(&collaboration); err != nil {
+		return nil, fmt.Errorf("failed to decode collaboration response: %w", err)
+	}
+
+	return &collaboration, nil
+}
+
+func (c *boxClient) ListCollaborations(itemID, itemType string) (*CollaborationsResponse, error) {
+	if itemID == "" {
+		return nil, fmt.Errorf("item ID cannot be empty")
+	}
+	if itemType == "" {
+		itemType = ItemTypeFile // Default to file
+	}
+
+	url := fmt.Sprintf("%s/%ss/%s/collaborations", BoxAPIBaseURL, itemType, itemID)
+	resp, err := c.httpClient.Get(context.Background(), url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collaborations: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNotFound,
+			Message:    fmt.Sprintf("%s with ID '%s' not found", itemType, itemID),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list collaborations, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var collaborations CollaborationsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&collaborations); err != nil {
+		return nil, fmt.Errorf("failed to decode collaborations response: %w", err)
+	}
+
+	return &collaborations, nil
+}
+
+func (c *boxClient) DeleteCollaboration(collaborationID string) error {
+	if collaborationID == "" {
+		return fmt.Errorf("collaboration ID cannot be empty")
+	}
+
+	url := fmt.Sprintf("%s/collaborations/%s", BoxAPIBaseURL, collaborationID)
+	req, err := http.NewRequestWithContext(context.Background(), "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete collaboration request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete collaboration: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNotFound,
+			Message:    fmt.Sprintf("collaboration with ID '%s' not found", collaborationID),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete collaboration, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Folder, error) {
 	if folderPath == "" || folderPath == "/" {
 		if parentID == "" {

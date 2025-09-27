@@ -24,6 +24,19 @@ const (
 	StatusPaused      DownloadStatusType = "paused"
 )
 
+// BoxUploadInfo represents Box upload information
+type BoxUploadInfo struct {
+	Uploaded        bool      `json:"uploaded"`
+	FileID          string    `json:"file_id,omitempty"`
+	FolderID        string    `json:"folder_id,omitempty"`
+	UploadDate      time.Time `json:"upload_date,omitempty"`
+	PermissionsSet  bool      `json:"permissions_set"`
+	PermissionIDs   []string  `json:"permission_ids,omitempty"`
+	UploadRetries   int       `json:"upload_retries"`
+	UploadError     string    `json:"upload_error,omitempty"`
+	LastUploadAttempt time.Time `json:"last_upload_attempt,omitempty"`
+}
+
 // DownloadEntry represents a single download entry in the status file
 type DownloadEntry struct {
 	Status             DownloadStatusType     `json:"status"`
@@ -38,6 +51,8 @@ type DownloadEntry struct {
 	StartTime          time.Time              `json:"start_time,omitempty"`
 	CompletedTime      time.Time              `json:"completed_time,omitempty"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty"`
+	VideoOwner         string                 `json:"video_owner,omitempty"`
+	Box                *BoxUploadInfo         `json:"box,omitempty"`
 }
 
 // StatusFile represents the structure of the status file
@@ -58,6 +73,16 @@ type StatusTracker interface {
 	GetAllDownloads() map[string]DownloadEntry
 	GetDownloadsByStatus(status DownloadStatusType) map[string]DownloadEntry
 	GetIncompleteDownloads() map[string]DownloadEntry
+	
+	// Box upload status methods
+	UpdateBoxUploadStatus(downloadID string, boxInfo BoxUploadInfo) error
+	GetBoxUploadStatus(downloadID string) (*BoxUploadInfo, error)
+	MarkBoxUploadStarted(downloadID, folderID string) error
+	MarkBoxUploadCompleted(downloadID, fileID string) error
+	MarkBoxUploadFailed(downloadID, errorMsg string) error
+	MarkBoxPermissionsSet(downloadID string, permissionIDs []string) error
+	GetPendingBoxUploads() map[string]DownloadEntry
+	GetFailedBoxUploads() map[string]DownloadEntry
 	
 	// Utility operations
 	SaveToFile() error
@@ -547,4 +572,187 @@ func (stm *StatusTrackerWithManager) StartDownloadWithTracking(ctx context.Conte
 	stm.UpdateDownloadStatus(req.ID, entry)
 	
 	return result, err
+}
+
+// Box Upload Status Helper Functions
+
+// UpdateBoxUploadStatus updates the Box upload information for a download entry
+func (st *statusTrackerImpl) UpdateBoxUploadStatus(downloadID string, boxInfo BoxUploadInfo) error {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	entry.Box = &boxInfo
+	st.data.Downloads[downloadID] = entry
+	st.data.LastUpdated = time.Now().UTC()
+	
+	return st.saveToFileUnsafe()
+}
+
+// GetBoxUploadStatus returns the Box upload status for a download entry
+func (st *statusTrackerImpl) GetBoxUploadStatus(downloadID string) (*BoxUploadInfo, error) {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return nil, fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	return entry.Box, nil
+}
+
+// MarkBoxUploadStarted marks that a Box upload has started for a download entry
+func (st *statusTrackerImpl) MarkBoxUploadStarted(downloadID, folderID string) error {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	if entry.Box == nil {
+		entry.Box = &BoxUploadInfo{}
+	}
+	
+	entry.Box.FolderID = folderID
+	entry.Box.LastUploadAttempt = time.Now().UTC()
+	
+	st.data.Downloads[downloadID] = entry
+	st.data.LastUpdated = time.Now().UTC()
+	
+	return st.saveToFileUnsafe()
+}
+
+// MarkBoxUploadCompleted marks that a Box upload has completed successfully
+func (st *statusTrackerImpl) MarkBoxUploadCompleted(downloadID, fileID string) error {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	if entry.Box == nil {
+		entry.Box = &BoxUploadInfo{}
+	}
+	
+	entry.Box.Uploaded = true
+	entry.Box.FileID = fileID
+	entry.Box.UploadDate = time.Now().UTC()
+	entry.Box.UploadError = ""
+	
+	st.data.Downloads[downloadID] = entry
+	st.data.LastUpdated = time.Now().UTC()
+	
+	return st.saveToFileUnsafe()
+}
+
+// MarkBoxUploadFailed marks that a Box upload has failed
+func (st *statusTrackerImpl) MarkBoxUploadFailed(downloadID, errorMsg string) error {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	if entry.Box == nil {
+		entry.Box = &BoxUploadInfo{}
+	}
+	
+	entry.Box.Uploaded = false
+	entry.Box.UploadError = errorMsg
+	entry.Box.UploadRetries++
+	entry.Box.LastUploadAttempt = time.Now().UTC()
+	
+	st.data.Downloads[downloadID] = entry
+	st.data.LastUpdated = time.Now().UTC()
+	
+	return st.saveToFileUnsafe()
+}
+
+// MarkBoxPermissionsSet marks that Box permissions have been set for uploaded file
+func (st *statusTrackerImpl) MarkBoxPermissionsSet(downloadID string, permissionIDs []string) error {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+	
+	entry, exists := st.data.Downloads[downloadID]
+	if !exists {
+		return fmt.Errorf("download %s not found", downloadID)
+	}
+	
+	if entry.Box == nil {
+		return fmt.Errorf("no Box upload info found for download %s", downloadID)
+	}
+	
+	entry.Box.PermissionsSet = true
+	entry.Box.PermissionIDs = permissionIDs
+	
+	st.data.Downloads[downloadID] = entry
+	st.data.LastUpdated = time.Now().UTC()
+	
+	return st.saveToFileUnsafe()
+}
+
+// GetPendingBoxUploads returns downloads that are completed but not uploaded to Box
+func (st *statusTrackerImpl) GetPendingBoxUploads() map[string]DownloadEntry {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+	
+	result := make(map[string]DownloadEntry)
+	for id, entry := range st.data.Downloads {
+		if entry.Status == StatusCompleted && (entry.Box == nil || !entry.Box.Uploaded) {
+			result[id] = entry
+		}
+	}
+	
+	return result
+}
+
+// GetFailedBoxUploads returns downloads with failed Box uploads that can be retried
+func (st *statusTrackerImpl) GetFailedBoxUploads() map[string]DownloadEntry {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+	
+	result := make(map[string]DownloadEntry)
+	for id, entry := range st.data.Downloads {
+		if entry.Box != nil && !entry.Box.Uploaded && entry.Box.UploadError != "" {
+			result[id] = entry
+		}
+	}
+	
+	return result
+}
+
+// ShouldRetryBoxUpload checks if a failed Box upload should be retried
+func ShouldRetryBoxUpload(entry DownloadEntry, maxRetries int) bool {
+	if entry.Box == nil {
+		return true // No upload attempted yet
+	}
+	
+	if entry.Box.Uploaded {
+		return false // Already uploaded successfully
+	}
+	
+	if entry.Box.UploadRetries >= maxRetries {
+		return false // Exceeded max retries
+	}
+	
+	// Check if enough time has passed since last attempt (exponential backoff)
+	if !entry.Box.LastUploadAttempt.IsZero() {
+		minWait := time.Duration(entry.Box.UploadRetries*entry.Box.UploadRetries) * time.Minute
+		if time.Since(entry.Box.LastUploadAttempt) < minWait {
+			return false // Too soon to retry
+		}
+	}
+	
+	return true
 }
