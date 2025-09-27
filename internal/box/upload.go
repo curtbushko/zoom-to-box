@@ -143,7 +143,8 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		progressCallback(0, 0, PhaseCreatingFolders)
 	}
 	
-	folder, err := um.createFolderStructure(ctx, folderPath)
+	// Create folder structure with user permissions
+	folder, err := um.createFolderStructureWithPermissions(ctx, folderPath, videoOwner)
 	if err != nil {
 		err = fmt.Errorf("failed to create folder structure: %w", err)
 		result.Error = err
@@ -277,9 +278,25 @@ func (um *boxUploadManager) UploadPendingFiles(ctx context.Context, statusTracke
 	return summary, nil
 }
 
-// createFolderStructure creates the necessary folder structure for the upload
+// createFolderStructure creates the necessary folder structure for the upload with proper permissions
 func (um *boxUploadManager) createFolderStructure(ctx context.Context, folderPath string) (*Folder, error) {
 	return CreateFolderPath(um.client, folderPath, um.baseFolderID)
+}
+
+// createFolderStructureWithPermissions creates folder structure with user-specific permissions
+func (um *boxUploadManager) createFolderStructureWithPermissions(ctx context.Context, folderPath, userEmail string) (*Folder, error) {
+	// Extract username from folderPath to set user permissions on their folder
+	pathParts := strings.Split(strings.Trim(folderPath, "/"), "/")
+	if len(pathParts) == 0 {
+		return um.createFolderStructure(ctx, folderPath)
+	}
+	
+	// Create user permissions - grant user access to their own folder structure
+	userPermissions := map[string]string{
+		userEmail: RoleViewer, // User can view their recordings but not modify
+	}
+	
+	return CreateFolderPathWithPermissions(um.client, folderPath, um.baseFolderID, userPermissions)
 }
 
 // setFilePermissions sets appropriate permissions on the uploaded file

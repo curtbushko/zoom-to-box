@@ -459,6 +459,116 @@ func (c *boxClient) DeleteCollaboration(collaborationID string) error {
 }
 
 func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Folder, error) {
+	return CreateFolderPathWithPermissions(client, folderPath, parentID, nil)
+}
+
+func CreateFolderPathWithPermissions(client BoxClient, folderPath string, parentID string, userPermissions map[string]string) (*Folder, error) {
+	if folderPath == "" || folderPath == "/" {
+		if parentID == "" {
+			parentID = RootFolderID
+		}
+		return client.GetFolder(parentID)
+	}
+
+	if parentID == "" {
+		parentID = RootFolderID
+	}
+
+	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
+	currentParentID := parentID
+	var createdFolders []*Folder
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		items, err := client.ListFolderItems(currentParentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list items in folder %s: %w", currentParentID, err)
+		}
+
+		var found *Item
+		for _, item := range items.Entries {
+			if item.Type == ItemTypeFolder && item.Name == part {
+				found = &item
+				break
+			}
+		}
+
+		if found != nil {
+			currentParentID = found.ID
+		} else {
+			folder, err := client.CreateFolder(part, currentParentID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create folder '%s' in parent %s: %w", part, currentParentID, err)
+			}
+			currentParentID = folder.ID
+			createdFolders = append(createdFolders, folder)
+		}
+	}
+
+	// Apply permissions to newly created folders if specified
+	if userPermissions != nil && len(createdFolders) > 0 {
+		for _, folder := range createdFolders {
+			if err := applyFolderPermissions(client, folder.ID, userPermissions); err != nil {
+				// Log warning but don't fail folder creation
+				fmt.Printf("Warning: failed to set permissions on folder %s: %v\n", folder.ID, err)
+			}
+		}
+	}
+
+	return client.GetFolder(currentParentID)
+}
+
+func ValidateFileName(fileName string) error {
+	if strings.TrimSpace(fileName) == "" {
+		return fmt.Errorf("file name cannot be empty")
+	}
+
+	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	for _, char := range invalidChars {
+		if strings.Contains(fileName, char) {
+			return fmt.Errorf("file name contains invalid character: %s", char)
+		}
+	}
+
+	if len(fileName) > 255 {
+		return fmt.Errorf("file name too long (max 255 characters)")
+	}
+
+	return nil
+}
+
+// Advanced folder management functions for Feature 4.4
+
+// applyFolderPermissions applies a set of user permissions to a folder
+func applyFolderPermissions(client BoxClient, folderID string, userPermissions map[string]string) error {
+	if userPermissions == nil || len(userPermissions) == 0 {
+		return nil
+	}
+
+	for userEmail, role := range userPermissions {
+		if userEmail == "" || role == "" {
+			continue
+		}
+
+		_, err := client.CreateCollaboration(folderID, ItemTypeFolder, userEmail, role)
+		if err != nil {
+			// Check if collaboration already exists
+			if boxErr, ok := err.(*BoxError); ok && boxErr.Code == ErrorCodeItemNameTaken {
+				// Collaboration exists, that's okay
+				continue
+			}
+			return fmt.Errorf("failed to create collaboration for user %s: %w", userEmail, err)
+		}
+	}
+	
+	return nil
+}
+
+// FindFolderByPath searches for a folder by its path within a parent folder
+func FindFolderByPath(client BoxClient, folderPath string, parentID string) (*Folder, error) {
 	if folderPath == "" || folderPath == "/" {
 		if parentID == "" {
 			parentID = RootFolderID
@@ -491,35 +601,81 @@ func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Fo
 			}
 		}
 
-		if found != nil {
-			currentParentID = found.ID
-		} else {
-			folder, err := client.CreateFolder(part, currentParentID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create folder '%s' in parent %s: %w", part, currentParentID, err)
+		if found == nil {
+			return nil, &BoxError{
+				StatusCode: 404,
+				Code:       ErrorCodeItemNotFound,
+				Message:    fmt.Sprintf("folder '%s' not found in path '%s'", part, folderPath),
+				Retryable:  false,
 			}
-			currentParentID = folder.ID
 		}
+
+		currentParentID = found.ID
 	}
 
 	return client.GetFolder(currentParentID)
 }
 
-func ValidateFileName(fileName string) error {
-	if strings.TrimSpace(fileName) == "" {
-		return fmt.Errorf("file name cannot be empty")
+// EnsureUserFolderWithPermissions creates a user-specific folder structure with proper permissions
+func EnsureUserFolderWithPermissions(client BoxClient, username, userEmail string, baseFolderID string) (*Folder, error) {
+	if username == "" {
+		return nil, fmt.Errorf("username cannot be empty")
+	}
+	if userEmail == "" {
+		return nil, fmt.Errorf("user email cannot be empty")
 	}
 
-	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
-	for _, char := range invalidChars {
-		if strings.Contains(fileName, char) {
-			return fmt.Errorf("file name contains invalid character: %s", char)
+	// Create permissions map - grant the user access to their own folder
+	userPermissions := map[string]string{
+		userEmail: RoleViewer, // User can view their recordings but not modify folder structure
+	}
+
+	// Create the user folder with permissions
+	return CreateFolderPathWithPermissions(client, username, baseFolderID, userPermissions)
+}
+
+// SetFolderPermissions sets permissions on an existing folder
+func SetFolderPermissions(client BoxClient, folderID string, userPermissions map[string]string) error {
+	return applyFolderPermissions(client, folderID, userPermissions)
+}
+
+// GetFolderPermissions retrieves all collaborations (permissions) for a folder
+func GetFolderPermissions(client BoxClient, folderID string) (*CollaborationsResponse, error) {
+	return client.ListCollaborations(folderID, ItemTypeFolder)
+}
+
+// RemoveFolderPermissions removes access for specific users from a folder
+func RemoveFolderPermissions(client BoxClient, folderID string, userEmails []string) error {
+	if len(userEmails) == 0 {
+		return nil
+	}
+
+	// Get current collaborations
+	collaborations, err := client.ListCollaborations(folderID, ItemTypeFolder)
+	if err != nil {
+		return fmt.Errorf("failed to list collaborations: %w", err)
+	}
+
+	// Find and remove collaborations for specified users
+	for _, userEmail := range userEmails {
+		for _, collab := range collaborations.Entries {
+			if collab.AccessibleBy != nil && collab.AccessibleBy.Login == userEmail {
+				if err := client.DeleteCollaboration(collab.ID); err != nil {
+					return fmt.Errorf("failed to remove permission for user %s: %w", userEmail, err)
+				}
+				break
+			}
 		}
 	}
 
-	if len(fileName) > 255 {
-		return fmt.Errorf("file name too long (max 255 characters)")
-	}
+	return nil
+}
 
+// ValidateFolderStructure validates that the expected folder structure exists and is accessible
+func ValidateFolderStructure(client BoxClient, folderPath string, parentID string) error {
+	_, err := FindFolderByPath(client, folderPath, parentID)
+	if err != nil {
+		return fmt.Errorf("folder structure validation failed: %w", err)
+	}
 	return nil
 }
