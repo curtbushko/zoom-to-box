@@ -205,12 +205,10 @@ func TestSaveCredentialsToFile(t *testing.T) {
 }
 
 func TestNewBoxClientFromConfig(t *testing.T) {
-	tempDir := t.TempDir()
 	
 	tests := []struct {
 		name          string
 		config        *mockConfig
-		setupFile     func() string
 		expectedError string
 	}{
 		{
@@ -223,49 +221,43 @@ func TestNewBoxClientFromConfig(t *testing.T) {
 			expectedError: "Box integration is disabled",
 		},
 		{
-			name: "missing credentials file",
+			name: "missing client_id",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					Enabled:         true,
-					CredentialsFile: "",
+					Enabled:      true,
+					ClientID:     "",
+					ClientSecret: "test-secret",
 				},
 			},
-			expectedError: "box.credentials_file is required",
+			expectedError: "box.client_id is required",
+		},
+		{
+			name: "missing client_secret",
+			config: &mockConfig{
+				boxConfig: BoxConfig{
+					Enabled:      true,
+					ClientID:     "test-client",
+					ClientSecret: "",
+				},
+			},
+			expectedError: "box.client_secret is required",
 		},
 		{
 			name: "valid configuration",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					Enabled:         true,
-					CredentialsFile: "", // Will be set by setupFile
-					FolderID:        "12345",
-				},
-			},
-			setupFile: func() string {
-				credentialsFile := filepath.Join(tempDir, "valid_credentials.json")
-				credentials := &OAuth2Credentials{
+					Enabled:      true,
 					ClientID:     "test-client",
 					ClientSecret: "test-secret",
-					AccessToken:  "test-access-token",
-					RefreshToken: "test-refresh-token",
-					ExpiresIn:    3600,
-					TokenType:    "bearer",
-					Scope:        "base_explorer base_upload",
-				}
-				
-				data, _ := json.Marshal(credentials)
-				os.WriteFile(credentialsFile, data, 0600)
-				return credentialsFile
+					FolderID:     "12345",
+				},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.setupFile != nil {
-				credentialsFile := tt.setupFile()
-				tt.config.boxConfig.CredentialsFile = credentialsFile
-			}
+			// No setup needed for new structure
 			
 			client, err := NewBoxClientFromConfig(tt.config)
 			
@@ -339,17 +331,6 @@ func TestCreateBoxUploadPath(t *testing.T) {
 }
 
 func TestValidateBoxConfig(t *testing.T) {
-	tempDir := t.TempDir()
-	
-	// Create a valid credentials file for testing
-	validCredentialsFile := filepath.Join(tempDir, "valid.json")
-	validCredentials := &OAuth2Credentials{
-		ClientID:     "test-client",
-		ClientSecret: "test-secret",
-		AccessToken:  "test-access-token",
-	}
-	data, _ := json.Marshal(validCredentials)
-	os.WriteFile(validCredentialsFile, data, 0600)
 	
 	tests := []struct {
 		name          string
@@ -365,32 +346,35 @@ func TestValidateBoxConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "missing credentials file",
+			name: "missing client_id",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					Enabled:         true,
-					CredentialsFile: "",
+					Enabled:      true,
+					ClientID:     "",
+					ClientSecret: "test-secret",
 				},
 			},
-			expectedError: "box.credentials_file is required",
+			expectedError: "box.client_id is required",
 		},
 		{
-			name: "invalid credentials file",
+			name: "missing client_secret",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					Enabled:         true,
-					CredentialsFile: "/nonexistent/file.json",
+					Enabled:      true,
+					ClientID:     "test-client",
+					ClientSecret: "",
 				},
 			},
-			expectedError: "invalid Box credentials",
+			expectedError: "box.client_secret is required",
 		},
 		{
 			name: "valid configuration",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					Enabled:         true,
-					CredentialsFile: validCredentialsFile,
-					FolderID:        "12345",
+					Enabled:      true,
+					ClientID:     "test-client",
+					ClientSecret: "test-secret",
+					FolderID:     "12345",
 				},
 			},
 		},

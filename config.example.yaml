@@ -11,7 +11,8 @@ zoom:
 # Box integration settings (optional)
 box:
   enabled: false  # Set to true to enable Box uploads
-  credentials_file: "/path/to/box_credentials.json"
+  client_id: "your_box_client_id"
+  client_secret: "your_box_client_secret"
   folder_id: "your_box_folder_id"
 
 # Download settings
@@ -38,6 +39,7 @@ active_users:
 # ZOOM_CLIENT_ID - overrides zoom.client_id  
 # ZOOM_CLIENT_SECRET - overrides zoom.client_secret
 # ZOOM_BASE_URL - overrides zoom.base_url
-# BOX_CREDENTIALS_FILE - overrides box.credentials_file
+# BOX_CLIENT_ID - overrides box.client_id
+# BOX_CLIENT_SECRET - overrides box.client_secret
 # BOX_FOLDER_ID - overrides box.folder_id
 # DOWNLOAD_OUTPUT_DIR - overrides download.output_dir

@@ -211,16 +211,9 @@ BOX INTEGRATION (Optional):
 ==========================
 box:
   enabled: false                   # Enable Box uploads (default: false)
-  credentials_file: "box_credentials.json" # Path to Box OAuth 2.0 credentials file
+  client_id: "your_box_client_id"  # Box OAuth 2.0 client ID
+  client_secret: "your_box_client_secret" # Box OAuth 2.0 client secret
   folder_id: "0"                   # Target Box folder ID (default: "0" = root folder)
-
-# Box credentials file (box_credentials.json) should contain:
-# {
-#   "client_id": "your_box_oauth_client_id",
-#   "client_secret": "your_box_oauth_client_secret", 
-#   "access_token": "your_oauth_access_token",
-#   "refresh_token": "your_oauth_refresh_token"
-# }
 
 ACTIVE USERS FILTERING (Optional):
 =================================
@@ -248,8 +241,9 @@ Required Zoom API credentials (override config file):
   ZOOM_BASE_URL       - Zoom API base URL (optional)
 
 Optional Box integration:
-  BOX_CREDENTIALS_FILE - Path to Box credentials file
-  BOX_FOLDER_ID        - Target Box folder ID
+  BOX_CLIENT_ID     - Box OAuth 2.0 client ID
+  BOX_CLIENT_SECRET - Box OAuth 2.0 client secret  
+  BOX_FOLDER_ID     - Target Box folder ID
 
 Other settings:
   DOWNLOAD_OUTPUT_DIR  - Base download directory
@@ -291,8 +285,10 @@ EXAMPLE USAGE:
    zoom-to-box --zoom-user=john.doe@zoomaccount.com --box-user=john.doe@company.com --limit=5
 
 5. Box integration:
-   # Set up Box OAuth 2.0 credentials file
+   # Set Box OAuth 2.0 credentials in config.yaml or environment variables
    # Enable in config.yaml: box.enabled = true
+   export BOX_CLIENT_ID="your_box_client_id"
+   export BOX_CLIENT_SECRET="your_box_client_secret"
    zoom-to-box --config config.yaml
 
 DIRECTORY STRUCTURE:
@@ -311,7 +307,7 @@ TROUBLESHOOTING:
 - Ensure your Zoom app has Server-to-Server OAuth enabled
 - Verify required scopes are granted: recording:read, user:read, meeting:read
 - Check account_id matches your Zoom account (not user ID)
-- For Box integration, ensure OAuth 2.0 tokens are valid and not expired
+- For Box integration, ensure OAuth 2.0 client credentials are valid
 
 For more information, visit: https://github.com/curtbushko/zoom-to-box
 `

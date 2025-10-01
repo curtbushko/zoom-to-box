@@ -20,9 +20,10 @@ type ZoomConfig struct {
 
 // BoxConfig holds Box API authentication and settings
 type BoxConfig struct {
-	Enabled         bool   `yaml:"enabled" json:"enabled"`
-	CredentialsFile string `yaml:"credentials_file" json:"credentials_file"`
-	FolderID        string `yaml:"folder_id" json:"folder_id"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	ClientID     string `yaml:"client_id" json:"client_id"`
+	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	FolderID     string `yaml:"folder_id" json:"folder_id"`
 }
 
 // DownloadConfig holds download-related settings
@@ -157,8 +158,11 @@ func (c *Config) loadFromEnvironment() {
 		c.Zoom.BaseURL = val
 	}
 
-	if val := os.Getenv("BOX_CREDENTIALS_FILE"); val != "" {
-		c.Box.CredentialsFile = val
+	if val := os.Getenv("BOX_CLIENT_ID"); val != "" {
+		c.Box.ClientID = val
+	}
+	if val := os.Getenv("BOX_CLIENT_SECRET"); val != "" {
+		c.Box.ClientSecret = val
 	}
 	if val := os.Getenv("BOX_FOLDER_ID"); val != "" {
 		c.Box.FolderID = val

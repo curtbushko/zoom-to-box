@@ -9,9 +9,10 @@ import (
 )
 
 type BoxConfig struct {
-	Enabled         bool   `yaml:"enabled" json:"enabled"`
-	CredentialsFile string `yaml:"credentials_file" json:"credentials_file"`
-	FolderID        string `yaml:"folder_id" json:"folder_id"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	ClientID     string `yaml:"client_id" json:"client_id"`
+	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	FolderID     string `yaml:"folder_id" json:"folder_id"`
 }
 
 type Config interface {
@@ -25,13 +26,16 @@ func NewBoxClientFromConfig(config Config) (BoxClient, error) {
 		return nil, fmt.Errorf("Box integration is disabled in configuration")
 	}
 
-	if boxConfig.CredentialsFile == "" {
-		return nil, fmt.Errorf("box.credentials_file is required when Box is enabled")
+	if boxConfig.ClientID == "" {
+		return nil, fmt.Errorf("box.client_id is required when Box is enabled")
+	}
+	if boxConfig.ClientSecret == "" {
+		return nil, fmt.Errorf("box.client_secret is required when Box is enabled")
 	}
 
-	credentials, err := LoadCredentialsFromFile(boxConfig.CredentialsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load Box credentials: %w", err)
+	credentials := &OAuth2Credentials{
+		ClientID:     boxConfig.ClientID,
+		ClientSecret: boxConfig.ClientSecret,
 	}
 
 	httpClient := &http.Client{
@@ -92,13 +96,16 @@ func CreateBoxClientWithCredentialsCallback(config Config, saveCredentials func(
 		return nil, fmt.Errorf("Box integration is disabled in configuration")
 	}
 
-	if boxConfig.CredentialsFile == "" {
-		return nil, fmt.Errorf("box.credentials_file is required when Box is enabled")
+	if boxConfig.ClientID == "" {
+		return nil, fmt.Errorf("box.client_id is required when Box is enabled")
+	}
+	if boxConfig.ClientSecret == "" {
+		return nil, fmt.Errorf("box.client_secret is required when Box is enabled")
 	}
 
-	credentials, err := LoadCredentialsFromFile(boxConfig.CredentialsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load Box credentials: %w", err)
+	credentials := &OAuth2Credentials{
+		ClientID:     boxConfig.ClientID,
+		ClientSecret: boxConfig.ClientSecret,
 	}
 
 	httpClient := &http.Client{
@@ -108,12 +115,7 @@ func CreateBoxClientWithCredentialsCallback(config Config, saveCredentials func(
 	auth := NewOAuth2Authenticator(credentials, httpClient)
 	
 	if saveCredentials != nil {
-		auth.(*oauth2Authenticator).SetCredentialsUpdateCallback(func(creds *OAuth2Credentials) error {
-			if err := saveCredentials(creds); err != nil {
-				return fmt.Errorf("failed to save updated credentials: %w", err)
-			}
-			return SaveCredentialsToFile(creds, boxConfig.CredentialsFile)
-		})
+		auth.(*oauth2Authenticator).SetCredentialsUpdateCallback(saveCredentials)
 	}
 
 	client := NewBoxClient(auth, httpClient)
@@ -135,13 +137,11 @@ func ValidateBoxConfig(config Config) error {
 		return nil
 	}
 
-	if boxConfig.CredentialsFile == "" {
-		return fmt.Errorf("box.credentials_file is required when Box is enabled")
+	if boxConfig.ClientID == "" {
+		return fmt.Errorf("box.client_id is required when Box is enabled")
 	}
-
-	_, err := LoadCredentialsFromFile(boxConfig.CredentialsFile)
-	if err != nil {
-		return fmt.Errorf("invalid Box credentials: %w", err)
+	if boxConfig.ClientSecret == "" {
+		return fmt.Errorf("box.client_secret is required when Box is enabled")
 	}
 
 	return nil

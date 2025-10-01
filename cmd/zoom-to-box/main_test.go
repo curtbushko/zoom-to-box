@@ -434,7 +434,7 @@ func TestEnhancedConfigHelp(t *testing.T) {
 		{"Server-to-Server OAuth info", "Server-to-Server OAuth", true},
 		{"Required scopes", "recording:read, user:read, meeting:read", true},
 		{"Box integration section", "BOX INTEGRATION (Optional):", true},
-		{"Box credentials format", "box_credentials.json", true},
+		{"Box credentials format", "client_id", true},
 		{"Active users section", "ACTIVE USERS FILTERING (Optional):", true},
 		{"Environment variables section", "ENVIRONMENT VARIABLES:", true},
 		{"Authentication methods", "AUTHENTICATION METHODS:", true},

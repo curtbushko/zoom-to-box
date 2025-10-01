@@ -26,7 +26,8 @@ zoom:
 
 box:
   enabled: true
-  credentials_file: "/path/to/box_credentials.json"
+  client_id: "test_box_client_id"
+  client_secret: "test_box_client_secret"
   folder_id: "test_folder_id"
 
 download:
@@ -52,9 +53,10 @@ active_users:
 				BaseURL:      "https://api.zoom.us/v2",
 			},
 			expectedBox: BoxConfig{
-				Enabled:         true,
-				CredentialsFile: "/path/to/box_credentials.json",
-				FolderID:        "test_folder_id",
+				Enabled:      true,
+				ClientID:     "test_box_client_id",
+				ClientSecret: "test_box_client_secret",
+				FolderID:     "test_folder_id",
 			},
 			shouldError: false,
 		},
@@ -135,8 +137,11 @@ zoom:
 			if config.Box.Enabled != tt.expectedBox.Enabled {
 				t.Errorf("Expected Box Enabled %t, got %t", tt.expectedBox.Enabled, config.Box.Enabled)
 			}
-			if config.Box.CredentialsFile != tt.expectedBox.CredentialsFile {
-				t.Errorf("Expected Box CredentialsFile %s, got %s", tt.expectedBox.CredentialsFile, config.Box.CredentialsFile)
+			if config.Box.ClientID != tt.expectedBox.ClientID {
+				t.Errorf("Expected Box ClientID %s, got %s", tt.expectedBox.ClientID, config.Box.ClientID)
+			}
+			if config.Box.ClientSecret != tt.expectedBox.ClientSecret {
+				t.Errorf("Expected Box ClientSecret %s, got %s", tt.expectedBox.ClientSecret, config.Box.ClientSecret)
 			}
 		})
 	}
