@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -14,6 +16,10 @@ import (
 	"github.com/curtbushko/zoom-to-box/internal/download"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
 	"github.com/curtbushko/zoom-to-box/internal/progress"
+	"github.com/curtbushko/zoom-to-box/internal/users"
+	"github.com/curtbushko/zoom-to-box/internal/zoom"
+	"github.com/curtbushko/zoom-to-box/internal/directory"
+	"github.com/curtbushko/zoom-to-box/internal/filename"
 )
 
 var (
@@ -419,8 +425,8 @@ func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *confi
 		logger.LogUserAction("session_start", "cli", sessionInfo)
 	}
 
-	// Simulate download operations (this would be replaced with actual download logic)
-	if err := simulateDownloads(ctx, reporter, totalItems, singleUserConfig); err != nil {
+	// Execute real download operations
+	if err := performDownloads(ctx, cfg, reporter, singleUserConfig); err != nil {
 		return fmt.Errorf("download operation failed: %w", err)
 	}
 
@@ -448,8 +454,8 @@ func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *confi
 
 // estimateTotalItems estimates the total number of items to process
 func estimateTotalItems(cfg *config.Config, limitFlag int) int {
-	// This is a placeholder - in real implementation, this would query the Zoom API
-	// to get an accurate count of recordings to process
+	// For now, return a reasonable estimate
+	// In a future enhancement, this could query the API for accurate counts
 	estimated := 50 // Default estimate
 	
 	if limitFlag > 0 && limitFlag < estimated {
@@ -459,93 +465,306 @@ func estimateTotalItems(cfg *config.Config, limitFlag int) int {
 	return estimated
 }
 
-// simulateDownloads simulates the download process for demonstration
-func simulateDownloads(ctx context.Context, reporter progress.ProgressReporter, totalItems int, singleUserConfig SingleUserConfig) error {
-	// This is a placeholder that simulates downloads
-	// In the real implementation, this would:
-	// 1. Initialize Zoom API client
-	// 2. Get list of users and recordings
-	// 3. Filter based on active users OR use single user mode
-	// 4. Download recordings with progress tracking
-	// 5. Upload to Box if configured
+// performDownloads executes the real download process
+func performDownloads(ctx context.Context, cfg *config.Config, reporter progress.ProgressReporter, singleUserConfig SingleUserConfig) error {
+	logger := logging.GetDefaultLogger()
 	
-	// In single user mode, we would only process the specified user
+	// Initialize Zoom API client
+	auth := zoom.NewServerToServerAuth(cfg.Zoom)
+	httpConfig := zoom.HTTPClientConfigFromDownloadConfig(cfg.Download)
+	retryClient := zoom.NewRetryHTTPClient(httpConfig)
+	authRetryClient := zoom.NewAuthenticatedRetryClient(retryClient, auth)
+	zoomClient := zoom.NewZoomClient(authRetryClient, cfg.Zoom.BaseURL)
+	
+	// Initialize download manager
+	downloadManager := download.NewDownloadManager(download.DownloadConfig{
+		ConcurrentLimit: cfg.Download.ConcurrentLimit,
+		ChunkSize:       64 * 1024, // 64KB chunks
+		RetryAttempts:   cfg.Download.RetryAttempts,
+		RetryDelay:      1 * time.Second,
+		UserAgent:       "zoom-to-box/1.0",
+		Timeout:         cfg.Download.TimeoutDuration(),
+	})
+	
+	// Initialize user manager 
+	var userManager users.ActiveUserManager
+	var err error
 	if singleUserConfig.Enabled {
-		fmt.Printf("📋 Single user mode: Processing recordings for %s\n", singleUserConfig.ZoomEmail)
-		fmt.Printf("📁 Folder structure will use: %s\n", singleUserConfig.BoxEmail)
-		fmt.Printf("🔐 Box permissions will be granted to: %s\n", singleUserConfig.BoxEmail)
+		// For single user mode, create a user manager that accepts all users (empty file path)
+		userManager, err = users.NewActiveUserManager(users.ActiveUserConfig{
+			FilePath:      "", // Empty path means all users are active
+			CaseSensitive: false,
+			WatchFile:     false,
+		})
+	} else {
+		// For normal mode, use the configured active users file
+		userManager, err = users.NewActiveUserManager(users.ActiveUserConfig{
+			FilePath:      cfg.ActiveUsers.File,
+			CaseSensitive: false,
+			WatchFile:     false, // Disable watching for CLI execution
+		})
 	}
-
-	for i := 0; i < totalItems; i++ {
+	if err != nil {
+		return fmt.Errorf("failed to initialize user manager: %w", err)
+	}
+	defer userManager.Close()
+	
+	// Initialize directory manager
+	dirConfig := directory.DirectoryConfig{
+		BaseDirectory: cfg.Download.OutputDir,
+		CreateDirs:    true,
+	}
+	dirManager := directory.NewDirectoryManager(dirConfig, userManager)
+	
+	// Initialize filename sanitizer
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+	
+	// Determine users to process
+	var usersToProcess []string
+	if singleUserConfig.Enabled {
+		usersToProcess = []string{singleUserConfig.ZoomEmail}
+		fmt.Printf("📋 Single user mode: Processing recordings for %s\n", singleUserConfig.ZoomEmail)
+		if singleUserConfig.BoxEmail != singleUserConfig.ZoomEmail {
+			fmt.Printf("📁 Box email mapping: %s → %s\n", singleUserConfig.ZoomEmail, singleUserConfig.BoxEmail)
+		}
+	} else {
+		// Get active users from user manager
+		if userManager != nil {
+			usersToProcess = userManager.GetActiveUsers()
+		}
+		if len(usersToProcess) == 0 {
+			return fmt.Errorf("no active users found to process")
+		}
+		fmt.Printf("📋 Processing recordings for %d users\n", len(usersToProcess))
+	}
+	
+	// Process each user
+	var totalProcessed int
+	for _, userEmail := range usersToProcess {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-
-		filename := fmt.Sprintf("meeting-%d.mp4", i+1)
 		
-		// Simulate different outcomes
-		if i%10 == 9 { // Every 10th item fails
-			reporter.AddError(filename, fmt.Errorf("simulated network error"), map[string]interface{}{
-				"item_index": i,
-				"url":        fmt.Sprintf("https://api.zoom.us/recording/%d", i),
-			})
-		} else if i%7 == 6 { // Every 7th item is skipped
-			var reason progress.SkipReason
-			switch i % 3 {
-			case 0:
-				reason = progress.SkipReasonAlreadyExists
-			case 1:
-				reason = progress.SkipReasonInactiveUser
-			default:
-				reason = progress.SkipReasonMetaOnlyMode
-			}
-			
-			reporter.AddSkipped(reason, filename, map[string]interface{}{
-				"item_index": i,
-				"path":       fmt.Sprintf("/downloads/user/%s", filename),
-			})
-		} else {
-			// Simulate successful download
-			downloadID := fmt.Sprintf("download-%d", i)
-			
-			// Start download
-			reporter.UpdateDownload(download.ProgressUpdate{
-				DownloadID:      downloadID,
-				BytesDownloaded: 0,
-				TotalBytes:      1048576, // 1MB
-				Speed:           0,
-				State:           download.DownloadStateDownloading,
-				Timestamp:       time.Now(),
-				Metadata:        map[string]interface{}{"filename": filename},
-			})
-			
-			// Simulate progress
-			for progress := int64(0); progress <= 1048576; progress += 262144 {
-				time.Sleep(50 * time.Millisecond) // Simulate download time
-				
-				state := download.DownloadStateDownloading
-				if progress >= 1048576 {
-					state = download.DownloadStateCompleted
-				}
-				
-				reporter.UpdateDownload(download.ProgressUpdate{
-					DownloadID:      downloadID,
-					BytesDownloaded: progress,
-					TotalBytes:      1048576,
-					Speed:           float64(progress) / 0.2, // Simulate speed
-					State:           state,
-					Timestamp:       time.Now(),
-					Metadata:        map[string]interface{}{"filename": filename},
-				})
-			}
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Processing user: %s", userEmail))
 		}
 		
-		time.Sleep(100 * time.Millisecond) // Simulate processing time
+		// Get recordings for this user
+		params := zoom.ListRecordingsParams{
+			From:     getFromDate(),
+			To:       getToDate(),
+			PageSize: 300, // Maximum page size
+		}
+		
+		recordings, err := zoomClient.GetAllUserRecordings(ctx, userEmail, params)
+		if err != nil {
+			if logger != nil {
+				logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to get recordings for user %s: %v", userEmail, err))
+			}
+			reporter.AddError(userEmail, fmt.Errorf("failed to get recordings: %w", err), map[string]interface{}{
+				"user_email": userEmail,
+			})
+			continue
+		}
+		
+		// Process recordings for this user
+		userProcessed, err := processUserRecordings(ctx, userEmail, recordings, cfg, reporter, downloadManager, dirManager, filenameSanitizer, singleUserConfig)
+		if err != nil {
+			if logger != nil {
+				logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to process recordings for user %s: %v", userEmail, err))
+			}
+			reporter.AddError(userEmail, fmt.Errorf("failed to process recordings: %w", err), map[string]interface{}{
+				"user_email": userEmail,
+			})
+			continue
+		}
+		
+		totalProcessed += userProcessed
+		
+		// Check global limit
+		if limit > 0 && totalProcessed >= limit {
+			break
+		}
 	}
-
+	
 	return nil
+}
+
+// processUserRecordings processes all recordings for a single user
+func processUserRecordings(ctx context.Context, userEmail string, recordings []*zoom.Recording, cfg *config.Config, reporter progress.ProgressReporter, downloadManager download.DownloadManager, dirManager directory.DirectoryManager, filenameSanitizer filename.FileSanitizer, singleUserConfig SingleUserConfig) (int, error) {
+	logger := logging.GetDefaultLogger()
+	processed := 0
+	
+	for _, recording := range recordings {
+		select {
+		case <-ctx.Done():
+			return processed, ctx.Err()
+		default:
+		}
+		
+		// Check global limit
+		if limit > 0 && processed >= limit {
+			break
+		}
+		
+		// Process each recording file in the meeting
+		for _, recordingFile := range recording.RecordingFiles {
+			// Skip if no download URL
+			if recordingFile.DownloadURL == "" {
+				continue
+			}
+			
+			// Skip non-MP4 files unless we want all
+			if recordingFile.FileType != "MP4" && !metaOnly {
+				continue
+			}
+			
+			// Get meeting date for directory structure
+			meetingTime := recording.StartTime
+			
+			// Create directory path
+			var dirPath string
+			if singleUserConfig.Enabled {
+				// For single user mode, create directory manually using Box email
+				userDir := strings.Split(singleUserConfig.BoxEmail, "@")[0] // Extract username part
+				dirPath = filepath.Join(cfg.Download.OutputDir, userDir, 
+					fmt.Sprintf("%04d", meetingTime.Year()), 
+					fmt.Sprintf("%02d", int(meetingTime.Month())), 
+					fmt.Sprintf("%02d", meetingTime.Day()))
+				
+				// Create directory if it doesn't exist
+				if err := os.MkdirAll(dirPath, 0755); err != nil {
+					if logger != nil {
+						logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to create directory for %s: %v", userEmail, err))
+					}
+					reporter.AddError(recording.Topic, fmt.Errorf("failed to create directory: %w", err), map[string]interface{}{
+						"user_email": userEmail,
+						"meeting_id": recording.UUID,
+					})
+					continue
+				}
+			} else {
+				// For normal mode, use directory manager
+				dirResult, err := dirManager.GenerateDirectory(userEmail, meetingTime)
+				if err != nil {
+					if logger != nil {
+						logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to create directory for %s: %v", userEmail, err))
+					}
+					reporter.AddError(recording.Topic, fmt.Errorf("failed to create directory: %w", err), map[string]interface{}{
+						"user_email": userEmail,
+						"meeting_id": recording.UUID,
+					})
+					continue
+				}
+				dirPath = dirResult.FullPath
+			}
+			
+			// Generate filename
+			meetingFileName := filenameSanitizer.SanitizeTopic(recording.Topic)
+			timeStr := filenameSanitizer.FormatTime(meetingTime)
+			filename := fmt.Sprintf("%s-%s.%s", meetingFileName, timeStr, strings.ToLower(recordingFile.FileType))
+			filePath := filepath.Join(dirPath, filename)
+			
+			// Check if file already exists
+			if _, err := os.Stat(filePath); err == nil {
+				reporter.AddSkipped(progress.SkipReasonAlreadyExists, filename, map[string]interface{}{
+					"user_email": userEmail,
+					"file_path":  filePath,
+				})
+				continue
+			}
+			
+			// Skip if meta-only mode and this is not a metadata file
+			if metaOnly && recordingFile.FileType == "MP4" {
+				reporter.AddSkipped(progress.SkipReasonMetaOnlyMode, filename, map[string]interface{}{
+					"user_email": userEmail,
+					"file_path":  filePath,
+				})
+				continue
+			}
+			
+			// Skip if dry run
+			if dryRun {
+				fmt.Printf("Would download: %s → %s\n", recordingFile.DownloadURL, filePath)
+				continue
+			}
+			
+			// Create download request
+			downloadReq := download.DownloadRequest{
+				ID:          fmt.Sprintf("%s-%s", recording.UUID, recordingFile.ID),
+				URL:         recordingFile.DownloadURL,
+				Destination: filePath,
+				FileSize:    recordingFile.FileSize,
+				Headers:     make(map[string]string),
+				Metadata: map[string]interface{}{
+					"user_email":    userEmail,
+					"meeting_id":    recording.UUID,
+					"meeting_topic": recording.Topic,
+					"file_type":     recordingFile.FileType,
+					"filename":      filename,
+				},
+			}
+			
+			// Perform download
+			progressCallback := func(update download.ProgressUpdate) {
+				reporter.UpdateDownload(update)
+			}
+			
+			result, err := downloadManager.Download(ctx, downloadReq, progressCallback)
+			if err != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Download failed for %s: %v", filename, err))
+				}
+				reporter.AddError(filename, err, map[string]interface{}{
+					"user_email": userEmail,
+					"file_path":  filePath,
+					"download_url": recordingFile.DownloadURL,
+				})
+				continue
+			}
+			
+			if logger != nil {
+				logger.InfoWithContext(ctx, fmt.Sprintf("Successfully downloaded %s (%d bytes)", filename, result.BytesDownloaded))
+			}
+			
+			// Also save metadata file
+			metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
+			metadataPath := filepath.Join(dirPath, metadataFilename)
+			if err := saveMetadata(recording, metadataPath); err != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to save metadata for %s: %v", filename, err))
+				}
+			}
+			
+			processed++
+		}
+	}
+	
+	return processed, nil
+}
+
+// saveMetadata saves recording metadata to a JSON file
+func saveMetadata(recording *zoom.Recording, filepath string) error {
+	data, err := json.MarshalIndent(recording, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+	
+	return os.WriteFile(filepath, data, 0644)
+}
+
+// getFromDate returns the start date for fetching recordings (30 days ago)
+func getFromDate() *time.Time {
+	from := time.Now().AddDate(0, 0, -30)
+	return &from
+}
+
+// getToDate returns the end date for fetching recordings (today)
+func getToDate() *time.Time {
+	to := time.Now()
+	return &to
 }
 
 // showDetailedSummary displays detailed summary information

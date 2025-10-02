@@ -36,4 +36,5 @@ go.work.sum
 /bin
 /temp
 /zoom-to-box
+/*.log
 .claude/settings.local.json
