@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/curtbushko/zoom-to-box/internal/email"
 	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
@@ -70,8 +69,6 @@ type directoryManagerImpl struct {
 	mutex             sync.RWMutex
 }
 
-// Email validation regex - same as users package
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$`)
 
 // NewDirectoryManager creates a new directory manager with the given configuration
 func NewDirectoryManager(config DirectoryConfig, activeUserManager users.ActiveUserManager) DirectoryManager {
@@ -94,7 +91,7 @@ func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate 
 		return nil, fmt.Errorf("user email cannot be empty")
 	}
 
-	if !isValidEmail(userEmail) {
+	if !email.IsValidEmail(userEmail) {
 		return nil, fmt.Errorf("invalid email format: %s", userEmail)
 	}
 
@@ -119,7 +116,7 @@ func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate 
 	}
 
 	// Sanitize Box email for directory name (use Box email for folder structure)
-	userDir := sanitizeEmailForDirectory(boxEmail)
+	userDir := email.ExtractUsername(boxEmail)
 	
 	// Convert meeting date to UTC for consistent directory structure
 	utcDate := meetingDate.UTC()
@@ -164,41 +161,3 @@ func (dm *directoryManagerImpl) GetStats() DirectoryStats {
 	return dm.stats
 }
 
-// sanitizeEmailForDirectory extracts the username portion from an email address
-// and sanitizes it for use as a directory name
-func sanitizeEmailForDirectory(email string) string {
-	// Split email at @ symbol and take the first part
-	parts := strings.Split(email, "@")
-	if len(parts) < 2 {
-		return email // Return as-is if no @ found (shouldn't happen with validation)
-	}
-	
-	username := parts[0]
-	
-	// The username part should already be valid for directory names
-	// Email validation ensures it contains only: a-zA-Z0-9._%+-
-	// These are all valid filesystem characters on most systems
-	
-	return username
-}
-
-// isValidEmail performs basic email validation
-func isValidEmail(email string) bool {
-	// Check for empty email first
-	if email == "" {
-		return false
-	}
-	
-	// Check if email has leading/trailing spaces (invalid)
-	if strings.TrimSpace(email) != email {
-		return false
-	}
-	
-	// Check for reasonable length limit (RFC 5321 suggests 320 chars max)
-	if len(email) > 320 {
-		return false
-	}
-	
-	// Check for basic format using regex
-	return emailRegex.MatchString(email)
-}

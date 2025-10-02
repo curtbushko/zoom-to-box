@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/curtbushko/zoom-to-box/internal/email"
 	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
@@ -202,7 +203,7 @@ admin@company.com`,
 			}
 
 			// Verify directory components
-			expectedUser := sanitizeEmailForDirectory(tt.userEmail)
+			expectedUser := email.ExtractUsername(tt.userEmail)
 			if result.UserDirectory != expectedUser {
 				t.Errorf("Expected user directory %s, got %s", expectedUser, result.UserDirectory)
 			}
@@ -242,7 +243,7 @@ func TestEmailSanitization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizeEmailForDirectory(tt.email)
+			result := email.ExtractUsername(tt.email)
 			if result != tt.expected {
 				t.Errorf("Expected %s, got %s", tt.expected, result)
 			}

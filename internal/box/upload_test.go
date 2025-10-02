@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/download"
+	"github.com/curtbushko/zoom-to-box/internal/email"
 )
 
 // Mock implementations for testing
@@ -641,9 +642,9 @@ func TestExtractUsernameFromEmail(t *testing.T) {
 	}
 	
 	for _, test := range tests {
-		result := extractUsernameFromEmail(test.email)
+		result := email.ExtractUsername(test.email)
 		if result != test.expected {
-			t.Errorf("extractUsernameFromEmail(%s) = %s, expected %s", 
+			t.Errorf("email.ExtractUsername(%s) = %s, expected %s", 
 				test.email, result, test.expected)
 		}
 	}

@@ -13,13 +13,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/curtbushko/zoom-to-box/internal/config"
+	"github.com/curtbushko/zoom-to-box/internal/directory"
 	"github.com/curtbushko/zoom-to-box/internal/download"
+	"github.com/curtbushko/zoom-to-box/internal/email"
+	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
 	"github.com/curtbushko/zoom-to-box/internal/progress"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
-	"github.com/curtbushko/zoom-to-box/internal/directory"
-	"github.com/curtbushko/zoom-to-box/internal/filename"
 )
 
 var (
@@ -654,7 +655,17 @@ func processUserRecordings(ctx context.Context, userEmail string, recordings []*
 			var dirPath string
 			if singleUserConfig.Enabled {
 				// For single user mode, create directory manually using Box email
-				userDir := strings.Split(singleUserConfig.BoxEmail, "@")[0] // Extract username part
+				userDir := email.ExtractUsername(singleUserConfig.BoxEmail)
+				if userDir == "" {
+					if logger != nil {
+						logger.ErrorWithContext(ctx, fmt.Sprintf("Invalid Box email format: %s", singleUserConfig.BoxEmail))
+					}
+					reporter.AddError(recording.Topic, fmt.Errorf("invalid Box email format: %s", singleUserConfig.BoxEmail), map[string]interface{}{
+						"user_email": userEmail,
+						"meeting_id": recording.UUID,
+					})
+					continue
+				}
 				dirPath = filepath.Join(cfg.Download.OutputDir, userDir, 
 					fmt.Sprintf("%04d", meetingTime.Year()), 
 					fmt.Sprintf("%02d", int(meetingTime.Month())), 

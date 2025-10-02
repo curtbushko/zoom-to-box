@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/download"
+	"github.com/curtbushko/zoom-to-box/internal/email"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
 )
 
@@ -129,7 +130,7 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 	}
 	
 	// Extract username from email (videoOwner)
-	username := extractUsernameFromEmail(videoOwner)
+	username := email.ExtractUsername(videoOwner)
 	if username == "" {
 		err := fmt.Errorf("invalid video owner email: %s", videoOwner)
 		result.Error = err
@@ -243,7 +244,7 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 	}
 	
 	// Extract username from Box email for folder structure
-	username := extractUsernameFromEmail(boxEmail)
+	username := email.ExtractUsername(boxEmail)
 	if username == "" {
 		err := fmt.Errorf("invalid box email: %s", boxEmail)
 		result.Error = err
@@ -470,19 +471,6 @@ func (um *boxUploadManager) setFilePermissions(ctx context.Context, fileID, vide
 
 // Helper functions
 
-// extractUsernameFromEmail extracts username portion from email address
-func extractUsernameFromEmail(email string) string {
-	if email == "" {
-		return ""
-	}
-	
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return ""
-	}
-	
-	return parts[0]
-}
 
 // createDateBasedFolderPath creates a date-based folder path for the given username and date
 // If username is empty, returns just the date-based path (for when baseFolderID is user's root)
