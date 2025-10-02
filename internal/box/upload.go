@@ -85,15 +85,12 @@ type boxUploadManager struct {
 	mutex        sync.RWMutex
 }
 
-// NewUploadManager creates a new Box upload manager
-func NewUploadManager(client BoxClient, baseFolderID string) UploadManager {
-	if baseFolderID == "" {
-		baseFolderID = RootFolderID
-	}
-	
+// NewUploadManager creates a new Box upload manager  
+// The base folder is automatically set to the authenticated user's root folder
+func NewUploadManager(client BoxClient) UploadManager {
 	return &boxUploadManager{
 		client:       client,
-		baseFolderID: baseFolderID,
+		baseFolderID: RootFolderID, // Use authenticated user's root folder
 		maxRetries:   3,
 	}
 }
@@ -488,13 +485,19 @@ func extractUsernameFromEmail(email string) string {
 }
 
 // createDateBasedFolderPath creates a date-based folder path for the given username and date
+// If username is empty, returns just the date-based path (for when baseFolderID is user's root)
 func createDateBasedFolderPath(username string, date time.Time) string {
 	utcDate := date.UTC()
-	return fmt.Sprintf("%s/%04d/%02d/%02d", 
-		username, 
+	datePath := fmt.Sprintf("%04d/%02d/%02d", 
 		utcDate.Year(), 
 		utcDate.Month(), 
 		utcDate.Day())
+	
+	if username == "" {
+		return datePath
+	}
+	
+	return fmt.Sprintf("%s/%s", username, datePath)
 }
 
 // UploadWithResume uploads a file with support for resuming interrupted uploads

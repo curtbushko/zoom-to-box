@@ -249,7 +249,6 @@ func TestNewBoxClientFromConfig(t *testing.T) {
 					Enabled:      true,
 					ClientID:     "test-client",
 					ClientSecret: "test-secret",
-					FolderID:     "12345",
 				},
 			},
 		},
@@ -296,7 +295,6 @@ func TestCreateBoxUploadPath(t *testing.T) {
 			name: "standard path",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					FolderID: "12345",
 				},
 			},
 			userAccount:  "john.doe@example.com",
@@ -309,7 +307,6 @@ func TestCreateBoxUploadPath(t *testing.T) {
 			name: "empty folder ID",
 			config: &mockConfig{
 				boxConfig: BoxConfig{
-					FolderID: "",
 				},
 			},
 			userAccount:  "jane.smith@example.com",
@@ -374,7 +371,6 @@ func TestValidateBoxConfig(t *testing.T) {
 					Enabled:      true,
 					ClientID:     "test-client",
 					ClientSecret: "test-secret",
-					FolderID:     "12345",
 				},
 			},
 		},

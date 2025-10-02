@@ -12,6 +12,9 @@ type BoxClient interface {
 	RefreshToken() error
 	IsAuthenticated() bool
 	
+	// User operations
+	GetCurrentUser() (*User, error)
+	
 	// Folder operations
 	CreateFolder(name string, parentID string) (*Folder, error)
 	GetFolder(folderID string) (*Folder, error)

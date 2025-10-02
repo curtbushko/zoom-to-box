@@ -46,6 +46,15 @@ func (m *mockBoxClient) IsAuthenticated() bool {
 	return true
 }
 
+func (m *mockBoxClient) GetCurrentUser() (*User, error) {
+	return &User{
+		ID:    "12345",
+		Type:  "user", 
+		Name:  "Test User",
+		Login: "test@example.com",
+	}, nil
+}
+
 func (m *mockBoxClient) CreateFolder(name string, parentID string) (*Folder, error) {
 	if m.folderError != nil {
 		return nil, m.folderError
@@ -327,7 +336,8 @@ func (m *mockStatusTracker) Close() error         { return nil }
 
 func TestNewUploadManager(t *testing.T) {
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, "test_folder")
+	manager := NewUploadManager(client)
+	manager.SetBaseFolderID("test_folder")
 	
 	if manager == nil {
 		t.Fatal("Expected upload manager to be created")
@@ -347,7 +357,7 @@ func TestUploadFile_Success(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	
 	ctx := context.Background()
 	result, err := manager.UploadFile(ctx, testFile, "john.doe@example.com", "test-download-1")
@@ -378,7 +388,7 @@ func TestUploadFileWithProgress_Success(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	
 	progressCallbacks := []UploadPhase{}
 	progressCallback := func(uploaded, total int64, phase UploadPhase) {
@@ -412,7 +422,7 @@ func TestUploadFile_UploadError(t *testing.T) {
 	
 	client := newMockBoxClient()
 	client.uploadError = fmt.Errorf("upload failed")
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	
 	ctx := context.Background()
 	result, err := manager.UploadFile(ctx, testFile, "user@example.com", "test-download-3")
@@ -439,7 +449,7 @@ func TestUploadWithResume_ExistingValidUpload(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	statusTracker := newMockStatusTracker()
 	
 	// Set up existing upload status
@@ -495,7 +505,7 @@ func TestUploadWithResume_NewUpload(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	statusTracker := newMockStatusTracker()
 	
 	downloadID := "test-download-new"
@@ -524,7 +534,7 @@ func TestUploadWithResume_NewUpload(t *testing.T) {
 
 func TestValidateUploadedFile(t *testing.T) {
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	
 	// Add a test file to the mock client
 	testFileID := "test-file-123"
@@ -578,7 +588,7 @@ func TestUploadPendingFiles(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	statusTracker := newMockStatusTracker()
 	
 	// Set up pending uploads
@@ -642,11 +652,30 @@ func TestExtractUsernameFromEmail(t *testing.T) {
 func TestCreateDateBasedFolderPath(t *testing.T) {
 	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	
-	result := createDateBasedFolderPath("john.doe", testTime)
-	expected := "john.doe/2024/01/15"
+	tests := []struct {
+		name     string
+		username string
+		expected string
+	}{
+		{
+			name:     "with username",
+			username: "john.doe",
+			expected: "john.doe/2024/01/15",
+		},
+		{
+			name:     "without username (base folder as user root)",
+			username: "",
+			expected: "2024/01/15",
+		},
+	}
 	
-	if result != expected {
-		t.Errorf("createDateBasedFolderPath() = %s, expected %s", result, expected)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := createDateBasedFolderPath(tt.username, testTime)
+			if result != tt.expected {
+				t.Errorf("createDateBasedFolderPath(%q) = %s, expected %s", tt.username, result, tt.expected)
+			}
+		})
 	}
 }
 
@@ -719,7 +748,7 @@ func TestShouldRetryBoxUpload(t *testing.T) {
 
 func TestCreateFolderStructureWithPermissions(t *testing.T) {
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID).(*boxUploadManager)
+	manager := NewUploadManager(client).(*boxUploadManager)
 	
 	ctx := context.Background()
 	folderPath := "john.doe/2024/01/15"
@@ -756,7 +785,7 @@ func TestUploadFileWithEnhancedFolderPermissions(t *testing.T) {
 	}
 	
 	client := newMockBoxClient()
-	manager := NewUploadManager(client, RootFolderID)
+	manager := NewUploadManager(client)
 	
 	ctx := context.Background()
 	videoOwner := "john.doe@company.com"

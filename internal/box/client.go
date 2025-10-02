@@ -34,6 +34,36 @@ func (c *boxClient) IsAuthenticated() bool {
 	return true
 }
 
+func (c *boxClient) GetCurrentUser() (*User, error) {
+	url := fmt.Sprintf("%s/users/me", BoxAPIBaseURL)
+	resp, err := c.httpClient.Get(context.Background(), url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current user: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeUnauthorized,
+			Message:    "unauthorized - invalid or expired access token",
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get current user, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var user User
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("failed to decode user response: %w", err)
+	}
+
+	return &user, nil
+}
+
 func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("folder name cannot be empty")

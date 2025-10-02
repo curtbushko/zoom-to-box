@@ -213,7 +213,7 @@ box:
   enabled: false                   # Enable Box uploads (default: false)
   client_id: "your_box_client_id"  # Box OAuth 2.0 client ID
   client_secret: "your_box_client_secret" # Box OAuth 2.0 client secret
-  folder_id: "0"                   # Target Box folder ID (default: "0" = root folder)
+  # Note: Files are uploaded to user-specific folders within the service account's root folder
 
 ACTIVE USERS FILTERING (Optional):
 =================================
@@ -242,8 +242,7 @@ Required Zoom API credentials (override config file):
 
 Optional Box integration:
   BOX_CLIENT_ID     - Box OAuth 2.0 client ID
-  BOX_CLIENT_SECRET - Box OAuth 2.0 client secret  
-  BOX_FOLDER_ID     - Target Box folder ID
+  BOX_CLIENT_SECRET - Box OAuth 2.0 client secret
 
 Other settings:
   DOWNLOAD_OUTPUT_DIR  - Base download directory
@@ -296,6 +295,15 @@ DIRECTORY STRUCTURE:
 Downloaded files are organized as:
 downloads/
 ├── user.email/
+│   └── YYYY/
+│       └── MM/
+│           └── DD/
+│               ├── meeting-topic-HHMM.mp4
+│               └── meeting-topic-HHMM.json
+
+Box uploads are organized as:
+<service-account-root>/
+├── username/
 │   └── YYYY/
 │       └── MM/
 │           └── DD/

@@ -23,7 +23,6 @@ type BoxConfig struct {
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
-	FolderID     string `yaml:"folder_id" json:"folder_id"`
 }
 
 // DownloadConfig holds download-related settings
@@ -163,9 +162,6 @@ func (c *Config) loadFromEnvironment() {
 	}
 	if val := os.Getenv("BOX_CLIENT_SECRET"); val != "" {
 		c.Box.ClientSecret = val
-	}
-	if val := os.Getenv("BOX_FOLDER_ID"); val != "" {
-		c.Box.FolderID = val
 	}
 
 	if val := os.Getenv("DOWNLOAD_OUTPUT_DIR"); val != "" {

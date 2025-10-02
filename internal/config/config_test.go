@@ -56,7 +56,6 @@ active_users:
 				Enabled:      true,
 				ClientID:     "test_box_client_id",
 				ClientSecret: "test_box_client_secret",
-				FolderID:     "test_folder_id",
 			},
 			shouldError: false,
 		},

@@ -29,7 +29,7 @@ clean: ## Clean /bin directory
 .PHONY: install
 install: ## Install the binary using go install
 	@echo "$(DATELOG) Installing $(BINARY)"
-	GOOS=$(OS) GOARCH=$(ARCH) go install
+	GOOS=$(OS) GOARCH=$(ARCH) go install ./cmd/zoom-to-box
 
 .PHONY: lint
 lint: ## Run golangci-lint
