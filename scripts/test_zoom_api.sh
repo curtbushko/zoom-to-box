@@ -75,7 +75,14 @@ echo ""
 echo "Fetching recordings for user: $USER_ID"
 
 # Get recordings from the last 30 days
-FROM_DATE=$(date -d '30 days ago' '+%Y-%m-%d')
+# Compatible with both macOS (BSD date) and Linux (GNU date)
+if date -v-30d >/dev/null 2>&1; then
+    # macOS/BSD date
+    FROM_DATE=$(date -v-30d '+%Y-%m-%d')
+else
+    # Linux/GNU date
+    FROM_DATE=$(date -d '30 days ago' '+%Y-%m-%d')
+fi
 TO_DATE=$(date '+%Y-%m-%d')
 
 echo "Date range: $FROM_DATE to $TO_DATE"
