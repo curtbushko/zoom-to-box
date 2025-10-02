@@ -26,8 +26,6 @@ usage() {
     echo "box:"
     echo "  client_id: \"your_client_id\""
     echo "  client_secret: \"your_client_secret\""
-    echo "  access_token: \"your_access_token\""
-    echo "  refresh_token: \"your_refresh_token\""
     exit 1
 }
 
@@ -55,46 +53,30 @@ get_yaml_value() {
     " "$file"
 }
 
-# Function to refresh access token
-refresh_token() {
-    local refresh_token="$1"
-    local client_id="$2"
-    local client_secret="$3"
+# Function to get access token using client credentials
+get_access_token() {
+    local client_id="$1"
+    local client_secret="$2"
  
-    log "Refreshing access token..."
+    log "Getting access token using client credentials..."
 
     local response=$(curl -s -X POST "https://api.box.com/oauth2/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "grant_type=refresh_token" \
-        -d "refresh_token=$refresh_token" \
+        -d "grant_type=client_credentials" \
         -d "client_id=$client_id" \
-        -d "client_secret=$client_secret")
+        -d "client_secret=$client_secret" \
+        -d "box_subject_type=enterprise" \
+        -d "box_subject_id=0")
 
-    # Check if refresh was successful
+    # Check if token request was successful
     if echo "$response" | grep -q '"access_token"'; then
-        # Extract new tokens using simple JSON parsing
-        local new_access_token=$(echo "$response" | grep -o '"access_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
-        local new_refresh_token=$(echo "$response" | grep -o '"refresh_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
-
-        # Update the YAML config file with new tokens
-        local temp_file=$(mktemp)
-        awk -v new_access="$new_access_token" -v new_refresh="$new_refresh_token" '
-            /^box:/ { in_box = 1 }
-            in_box && /^[[:space:]]*access_token:/ { 
-                sub(/access_token:.*/, "access_token: \"" new_access "\"")
-            }
-            in_box && /^[[:space:]]*refresh_token:/ { 
-                sub(/refresh_token:.*/, "refresh_token: \"" new_refresh "\"")
-            }
-            in_box && /^[[:alpha:]]/ && !/^[[:space:]]/ { in_box = 0 }
-            { print }
-        ' "$CONFIG_FILE" > "$temp_file"
-        mv "$temp_file" "$CONFIG_FILE"
-
-        log "Access token refreshed successfully"
-        echo "$new_access_token"
+        # Extract access token using simple JSON parsing
+        local access_token=$(echo "$response" | grep -o '"access_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
+        
+        log "Access token obtained successfully"
+        echo "$access_token"
     else
-        log "ERROR: Failed to refresh token: $response"
+        log "ERROR: Failed to get access token: $response"
         exit 1
     fi
 }
@@ -193,37 +175,26 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "box:"
     echo "  client_id: \"your_client_id\""
     echo "  client_secret: \"your_client_secret\""
-    echo "  access_token: \"your_access_token\""
-    echo "  refresh_token: \"your_refresh_token\""
     exit 1
 fi
 
 # Load credentials from YAML config file
 CLIENT_ID=$(get_yaml_value "$CONFIG_FILE" "client_id")
 CLIENT_SECRET=$(get_yaml_value "$CONFIG_FILE" "client_secret")
-ACCESS_TOKEN=$(get_yaml_value "$CONFIG_FILE" "access_token")
-REFRESH_TOKEN=$(get_yaml_value "$CONFIG_FILE" "refresh_token")
 
 # Validate credentials
-if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ] || [ -z "$ACCESS_TOKEN" ]; then
+if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
     echo "ERROR: Missing required credentials in config file"
-    echo "Required fields: client_id, client_secret, access_token"
+    echo "Required fields: client_id, client_secret"
     exit 1
 fi
 
 log "Starting Box upload process..."
 
-# Attempt upload
-if ! upload_file "$FILE_PATH" "$FOLDER_ID" "$FILE_NAME" "$ACCESS_TOKEN"; then
-    # If upload failed with 401, try to refresh token and retry
-    if [ -n "$REFRESH_TOKEN" ]; then
-        NEW_ACCESS_TOKEN=$(refresh_token "$REFRESH_TOKEN" "$CLIENT_ID" "$CLIENT_SECRET")
-        log "Retrying upload with refreshed token..."
-        upload_file "$FILE_PATH" "$FOLDER_ID" "$FILE_NAME" "$NEW_ACCESS_TOKEN"
-    else
-        log "ERROR: No refresh token available for token refresh"
-        exit 1
-    fi
-fi
+# Get access token using client credentials
+ACCESS_TOKEN=$(get_access_token "$CLIENT_ID" "$CLIENT_SECRET")
+
+# Upload file
+upload_file "$FILE_PATH" "$FOLDER_ID" "$FILE_NAME" "$ACCESS_TOKEN"
 
 log "Box upload completed successfully!"
