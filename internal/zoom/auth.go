@@ -106,7 +106,7 @@ func (s *ServerToServerAuth) GetAccessToken(ctx context.Context) (*AccessToken, 
 	}
 
 	// Prepare OAuth request
-	tokenURL := s.config.BaseURL + "/oauth/token"
+	tokenURL := "https://zoom.us/oauth/token"
 	data := url.Values{}
 	data.Set("grant_type", "account_credentials")
 	data.Set("account_id", s.config.AccountID)
