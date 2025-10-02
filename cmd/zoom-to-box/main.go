@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/curtbushko/zoom-to-box/internal/box"
 	"github.com/curtbushko/zoom-to-box/internal/config"
 	"github.com/curtbushko/zoom-to-box/internal/directory"
 	"github.com/curtbushko/zoom-to-box/internal/download"
@@ -538,6 +540,41 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 	// Initialize filename sanitizer
 	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
 	
+	// Initialize Box upload manager if enabled
+	var uploadManager box.UploadManager
+	if cfg.Box.Enabled {
+		// Validate Box configuration
+		if cfg.Box.ClientID == "" {
+			return fmt.Errorf("box.client_id is required when Box is enabled")
+		}
+		if cfg.Box.ClientSecret == "" {
+			return fmt.Errorf("box.client_secret is required when Box is enabled")
+		}
+		
+		// Create Box client manually
+		credentials := &box.OAuth2Credentials{
+			ClientID:     cfg.Box.ClientID,
+			ClientSecret: cfg.Box.ClientSecret,
+		}
+		
+		httpClient := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+		
+		auth := box.NewOAuth2Authenticator(credentials, httpClient)
+		boxClient := box.NewBoxClient(auth, httpClient)
+		uploadManager = box.NewUploadManager(boxClient)
+		
+		if logger != nil {
+			logger.InfoWithContext(ctx, "Box upload integration enabled")
+		}
+		fmt.Printf("📦 Box upload integration enabled\n")
+	} else {
+		if logger != nil {
+			logger.InfoWithContext(ctx, "Box upload integration disabled")
+		}
+	}
+	
 	// Determine users to process
 	var usersToProcess []string
 	if singleUserConfig.Enabled {
@@ -591,7 +628,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 		}
 		
 		// Process recordings for this user
-		userProcessed, err := processUserRecordings(ctx, userEmail, recordings, cfg, reporter, downloadManager, dirManager, filenameSanitizer, singleUserConfig)
+		userProcessed, err := processUserRecordings(ctx, userEmail, recordings, cfg, reporter, downloadManager, dirManager, filenameSanitizer, uploadManager, singleUserConfig)
 		if err != nil {
 			if logger != nil {
 				logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to process recordings for user %s: %v", userEmail, err))
@@ -620,7 +657,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 }
 
 // processUserRecordings processes all recordings for a single user
-func processUserRecordings(ctx context.Context, userEmail string, recordings []*zoom.Recording, cfg *config.Config, reporter progress.ProgressReporter, downloadManager download.DownloadManager, dirManager directory.DirectoryManager, filenameSanitizer filename.FileSanitizer, singleUserConfig SingleUserConfig) (int, error) {
+func processUserRecordings(ctx context.Context, userEmail string, recordings []*zoom.Recording, cfg *config.Config, reporter progress.ProgressReporter, downloadManager download.DownloadManager, dirManager directory.DirectoryManager, filenameSanitizer filename.FileSanitizer, uploadManager box.UploadManager, singleUserConfig SingleUserConfig) (int, error) {
 	logger := logging.GetDefaultLogger()
 	processed := 0
 	
@@ -772,6 +809,50 @@ func processUserRecordings(ctx context.Context, userEmail string, recordings []*
 			if err := saveMetadata(recording, metadataPath); err != nil {
 				if logger != nil {
 					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to save metadata for %s: %v", filename, err))
+				}
+			}
+			
+			// Upload to Box if enabled
+			if uploadManager != nil {
+				var boxEmail string
+				if singleUserConfig.Enabled {
+					boxEmail = singleUserConfig.BoxEmail
+				} else {
+					boxEmail = userEmail
+				}
+				
+				// Upload both the video file and metadata file
+				filesToUpload := []string{filePath, metadataPath}
+				for _, fileToUpload := range filesToUpload {
+					if _, err := os.Stat(fileToUpload); err == nil {
+						downloadID := fmt.Sprintf("%s-%s-%s", recording.UUID, recordingFile.ID, filepath.Base(fileToUpload))
+						
+						var uploadResult *box.UploadResult
+						var uploadErr error
+						
+						if singleUserConfig.Enabled {
+							// Use email mapping for single user mode
+							uploadResult, uploadErr = uploadManager.UploadFileWithEmailMapping(ctx, fileToUpload, userEmail, boxEmail, downloadID, nil)
+						} else {
+							// Use standard upload for multi-user mode
+							uploadResult, uploadErr = uploadManager.UploadFile(ctx, fileToUpload, boxEmail, downloadID)
+						}
+						
+						if uploadErr != nil {
+							if logger != nil {
+								logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to upload %s to Box: %v", filepath.Base(fileToUpload), uploadErr))
+							}
+							reporter.AddError(fmt.Sprintf("Box upload: %s", filepath.Base(fileToUpload)), uploadErr, map[string]interface{}{
+								"user_email": userEmail,
+								"box_email":  boxEmail,
+								"file_path":  fileToUpload,
+							})
+						} else if uploadResult != nil && uploadResult.Success {
+							if logger != nil {
+								logger.InfoWithContext(ctx, fmt.Sprintf("Successfully uploaded %s to Box (file ID: %s)", filepath.Base(fileToUpload), uploadResult.FileID))
+							}
+						}
+					}
 				}
 			}
 			
