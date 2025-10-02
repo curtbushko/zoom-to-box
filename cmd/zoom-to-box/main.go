@@ -433,15 +433,33 @@ func runDownloadWithProgress(ctx context.Context, cmd *cobra.Command, cfg *confi
 	// Finish progress tracking and show summary
 	summary := reporter.Finish()
 
-	// Display results
+	// Display results based on actual progress
 	if dryRun {
 		cmd.Printf("\n🔍 DRY RUN COMPLETED\n")
-		cmd.Printf("Would have processed %d recordings\n", summary.TotalItems)
-		if metaOnly {
-			cmd.Printf("Would have downloaded metadata files only\n")
+		
+		// Check if there were errors that prevented processing
+		if len(summary.ErrorItems) > 0 && summary.CompletedDownloads == 0 {
+			cmd.Printf("❌ No recordings could be processed due to errors\n")
+			cmd.Printf("Errors encountered: %d\n", len(summary.ErrorItems))
+			if verbose {
+				for _, errorItem := range summary.ErrorItems {
+					cmd.Printf("  - %s: %s\n", errorItem.Item, errorItem.ErrorMsg)
+				}
+			}
+		} else {
+			cmd.Printf("Would have processed %d recordings\n", summary.CompletedDownloads+len(summary.SkippedItems))
+			if metaOnly {
+				cmd.Printf("Would have downloaded metadata files only\n")
+			}
 		}
 	} else {
-		cmd.Printf("\n✅ DOWNLOAD COMPLETED\n")
+		// Check if download was actually successful
+		if len(summary.ErrorItems) > 0 && summary.CompletedDownloads == 0 {
+			cmd.Printf("\n❌ DOWNLOAD FAILED\n")
+			cmd.Printf("No recordings could be downloaded due to errors\n")
+		} else {
+			cmd.Printf("\n✅ DOWNLOAD COMPLETED\n")
+		}
 		
 		// Show summary based on verbosity
 		if verbose || summary.FailedDownloads > 0 || len(summary.ErrorItems) > 0 {
@@ -540,6 +558,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 	
 	// Process each user
 	var totalProcessed int
+	var usersWithErrors int
 	for _, userEmail := range usersToProcess {
 		select {
 		case <-ctx.Done():
@@ -566,6 +585,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 			reporter.AddError(userEmail, fmt.Errorf("failed to get recordings: %w", err), map[string]interface{}{
 				"user_email": userEmail,
 			})
+			usersWithErrors++
 			continue
 		}
 		
@@ -578,6 +598,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 			reporter.AddError(userEmail, fmt.Errorf("failed to process recordings: %w", err), map[string]interface{}{
 				"user_email": userEmail,
 			})
+			usersWithErrors++
 			continue
 		}
 		
@@ -587,6 +608,11 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 		if limit > 0 && totalProcessed >= limit {
 			break
 		}
+	}
+	
+	// Return error if all users failed and no recordings were processed
+	if usersWithErrors == len(usersToProcess) && totalProcessed == 0 {
+		return fmt.Errorf("failed to process any users: all %d users encountered errors", len(usersToProcess))
 	}
 	
 	return nil
