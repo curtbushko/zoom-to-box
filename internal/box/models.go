@@ -47,28 +47,8 @@ type OAuth2Credentials struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
-// ServiceToServiceCredentials represents Box service-to-service authentication credentials
-type ServiceToServiceCredentials struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	PrivateKey   string `json:"private_key"`   // RSA private key in PEM format
-	KeyID        string `json:"key_id"`        // Key ID from Box Developer Console
-	EnterpriseID string `json:"enterprise_id"` // Enterprise ID for the service account
-	AccessToken  string `json:"access_token"`  // Current access token
-	ExpiresAt    time.Time `json:"expires_at"` // Token expiration time
-}
-
 // IsExpired returns true if the access token is expired or will expire soon
 func (c *OAuth2Credentials) IsExpired() bool {
-	if c.ExpiresAt.IsZero() {
-		return true
-	}
-	// Consider token expired if it expires within 5 minutes
-	return time.Now().Add(5 * time.Minute).After(c.ExpiresAt)
-}
-
-// IsExpired returns true if the access token is expired or will expire soon
-func (c *ServiceToServiceCredentials) IsExpired() bool {
 	if c.ExpiresAt.IsZero() {
 		return true
 	}

@@ -220,23 +220,9 @@ BOX INTEGRATION (Optional):
 ==========================
 box:
   enabled: false                   # Enable Box uploads (default: false)
-  auth_type: "oauth"               # Authentication method: "oauth" or "service-to-service" (default: oauth)
-  client_id: "your_box_client_id"  # Box client ID (required for both auth types)
-  client_secret: "your_box_client_secret" # Box client secret (required for both auth types)
-  
-  # For OAuth 2.0 authentication (auth_type: "oauth"):
-  # - Requires user consent and browser-based authorization
-  # - Suitable for individual user access
-  # - Uses authorization code flow with refresh tokens
-  
-  # For service-to-service authentication (auth_type: "service-to-service"):
-  private_key: "-----BEGIN RSA PRIVATE KEY-----\n..." # RSA private key in PEM format
-  key_id: "your_key_id"            # Key ID from Box Developer Console
-  enterprise_id: "your_enterprise_id" # Enterprise ID for service account
-  # - No user consent required
-  # - Uses JWT-based authentication
-  # - Suitable for server-to-server applications
-  # - Requires enterprise application setup in Box Developer Console
+  client_id: "your_box_client_id"  # Box OAuth 2.0 client ID
+  client_secret: "your_box_client_secret" # Box OAuth 2.0 client secret
+  # Note: Files are uploaded to user-specific folders within the service account's root folder
 
 ACTIVE USERS FILTERING (Optional):
 =================================
@@ -264,14 +250,8 @@ Required Zoom API credentials (override config file):
   ZOOM_BASE_URL       - Zoom API base URL (optional)
 
 Optional Box integration:
-  BOX_AUTH_TYPE     - Box authentication type: "oauth" or "service-to-service" (default: oauth)
-  BOX_CLIENT_ID     - Box client ID (required for both auth types)
-  BOX_CLIENT_SECRET - Box client secret (required for both auth types)
-  
-  # For service-to-service authentication only:
-  BOX_PRIVATE_KEY   - RSA private key in PEM format (with \n for line breaks)
-  BOX_KEY_ID        - Key ID from Box Developer Console  
-  BOX_ENTERPRISE_ID - Enterprise ID for service account
+  BOX_CLIENT_ID     - Box OAuth 2.0 client ID
+  BOX_CLIENT_SECRET - Box OAuth 2.0 client secret
 
 Other settings:
   DOWNLOAD_OUTPUT_DIR  - Base download directory
@@ -312,23 +292,11 @@ EXAMPLE USAGE:
    zoom-to-box --zoom-user=john.doe@company.com --box-user=john.doe@company.com
    zoom-to-box --zoom-user=john.doe@zoomaccount.com --box-user=john.doe@company.com --limit=5
 
-5. Box integration - OAuth 2.0:
+5. Box integration:
    # Set Box OAuth 2.0 credentials in config.yaml or environment variables
-   # Enable in config.yaml: box.enabled = true, box.auth_type = "oauth"
-   export BOX_AUTH_TYPE="oauth"
+   # Enable in config.yaml: box.enabled = true
    export BOX_CLIENT_ID="your_box_client_id"
    export BOX_CLIENT_SECRET="your_box_client_secret"
-   zoom-to-box --config config.yaml
-
-6. Box integration - Service-to-Service:
-   # Set Box service-to-service credentials in config.yaml or environment variables
-   # Enable in config.yaml: box.enabled = true, box.auth_type = "service-to-service"
-   export BOX_AUTH_TYPE="service-to-service"
-   export BOX_CLIENT_ID="your_box_client_id"
-   export BOX_CLIENT_SECRET="your_box_client_secret"
-   export BOX_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-   export BOX_KEY_ID="your_key_id"
-   export BOX_ENTERPRISE_ID="your_enterprise_id"
    zoom-to-box --config config.yaml
 
 DIRECTORY STRUCTURE:
@@ -356,13 +324,7 @@ TROUBLESHOOTING:
 - Ensure your Zoom app has Server-to-Server OAuth enabled
 - Verify required scopes are granted: recording:read, user:read, meeting:read
 - Check account_id matches your Zoom account (not user ID)
-- For Box OAuth integration, ensure OAuth 2.0 client credentials are valid
-- For Box service-to-service integration:
-  * Ensure enterprise application is configured in Box Developer Console
-  * Verify RSA keypair is generated and private key is in PEM format
-  * Check that key_id matches the public key uploaded to Box
-  * Confirm enterprise_id is correct (found in Box Admin Console)
-  * Ensure service account has proper permissions in the enterprise
+- For Box integration, ensure OAuth 2.0 client credentials are valid
 
 For more information, visit: https://github.com/curtbushko/zoom-to-box
 `
