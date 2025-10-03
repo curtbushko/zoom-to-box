@@ -89,8 +89,8 @@ get_access_token() {
     # Check if token request was successful
     if echo "$response" | grep -q '"access_token"'; then
         # Extract access token using simple JSON parsing
-        local access_token=$(echo "$response" | grep -o '"access_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
-        
+        local access_token=$(echo "$response" | grep -o '"access_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/')
+
         log "Access token obtained successfully"
         echo "$access_token"
     else
