@@ -222,6 +222,7 @@ box:
   enabled: false                   # Enable Box uploads (default: false)
   client_id: "your_box_client_id"  # Box OAuth 2.0 client ID
   client_secret: "your_box_client_secret" # Box OAuth 2.0 client secret
+  enterprise_id: "your_box_enterprise_id" # Box enterprise ID for client credentials auth
   # Note: Files are uploaded to user-specific folders within the service account's root folder
 
 ACTIVE USERS FILTERING (Optional):
@@ -252,6 +253,7 @@ Required Zoom API credentials (override config file):
 Optional Box integration:
   BOX_CLIENT_ID     - Box OAuth 2.0 client ID
   BOX_CLIENT_SECRET - Box OAuth 2.0 client secret
+  BOX_ENTERPRISE_ID - Box enterprise ID for client credentials auth
 
 Other settings:
   DOWNLOAD_OUTPUT_DIR  - Base download directory
@@ -555,6 +557,7 @@ func performDownloads(ctx context.Context, cfg *config.Config, reporter progress
 		credentials := &box.OAuth2Credentials{
 			ClientID:     cfg.Box.ClientID,
 			ClientSecret: cfg.Box.ClientSecret,
+			EnterpriseID: cfg.Box.EnterpriseID,
 		}
 		
 		httpClient := &http.Client{

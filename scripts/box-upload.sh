@@ -42,6 +42,7 @@ usage() {
     echo "box:"
     echo "  client_id: \"your_client_id\""
     echo "  client_secret: \"your_client_secret\""
+    echo "  enterprise_id: \"your_enterprise_id\""
     exit 1
 }
 
@@ -73,7 +74,8 @@ get_yaml_value() {
 get_access_token() {
     local client_id="$1"
     local client_secret="$2"
- 
+    local enterprise_id="$3"
+
     log "Getting access token using client credentials..."
 
     local response=$(curl -s -X POST "https://api.box.com/oauth2/token" \
@@ -82,7 +84,7 @@ get_access_token() {
         -d "client_id=$client_id" \
         -d "client_secret=$client_secret" \
         -d "box_subject_type=enterprise" \
-        -d "box_subject_id=0")
+        -d "box_subject_id=$enterprise_id")
 
     # Check if token request was successful
     if echo "$response" | grep -q '"access_token"'; then
@@ -171,6 +173,42 @@ create_folder() {
         log "ERROR: Failed to create folder: $response"
         return 1
     fi
+}
+
+# Function to list user's root folder contents
+list_user_folders() {
+    local access_token="$1"
+    local user_id="$2"
+
+    log "Listing folders for user $user_id..."
+
+    local response=$(curl -s -X GET "https://api.box.com/2.0/folders/0/items?fields=id,name,type&limit=100" \
+        -H "Authorization: Bearer $access_token" \
+        -H "As-User: $user_id")
+
+    # Check if request was successful
+    if echo "$response" | grep -q '"type":"error"'; then
+        log "ERROR: Failed to list folders: $response"
+        return 1
+    fi
+
+    echo ""
+    echo "=== User's Root Folder Contents ==="
+    echo ""
+
+    # Parse and display folders
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.entries[] | select(.type=="folder") | "  📁 \(.name) (ID: \(.id))"'
+        local folder_count=$(echo "$response" | jq '[.entries[] | select(.type=="folder")] | length')
+        echo ""
+        echo "Total folders: $folder_count"
+    else
+        # Fallback without jq - just show the raw folder data
+        echo "$response" | grep -o '"type":"folder"[^}]*"name":"[^"]*"[^}]*"id":"[^"]*"' | sed 's/.*"name":"\([^"]*\)".*"id":"\([^"]*\)".*/  📁 \1 (ID: \2)/'
+    fi
+
+    echo ""
+    return 0
 }
 
 # Function to create folder path (e.g., "recordings/2024/01/15")
@@ -323,24 +361,54 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "box:"
     echo "  client_id: \"your_client_id\""
     echo "  client_secret: \"your_client_secret\""
+    echo "  enterprise_id: \"your_enterprise_id\""
     exit 1
 fi
 
 # Load credentials from YAML config file
 CLIENT_ID=$(get_yaml_value "$CONFIG_FILE" "client_id")
 CLIENT_SECRET=$(get_yaml_value "$CONFIG_FILE" "client_secret")
+ENTERPRISE_ID=$(get_yaml_value "$CONFIG_FILE" "enterprise_id")
 
 # Validate credentials
-if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ] || [ -z "$ENTERPRISE_ID" ]; then
     echo "ERROR: Missing required credentials in config file"
-    echo "Required fields: client_id, client_secret"
+    echo "Required fields: client_id, client_secret, enterprise_id"
     exit 1
 fi
 
 log "Starting Box upload process..."
 
 # Get access token using client credentials
-ACCESS_TOKEN=$(get_access_token "$CLIENT_ID" "$CLIENT_SECRET")
+ACCESS_TOKEN=$(get_access_token "$CLIENT_ID" "$CLIENT_SECRET" "$ENTERPRISE_ID")
+
+# List user's folders
+list_user_folders "$ACCESS_TOKEN" "$USER_ID"
+
+# Ask for confirmation
+echo "You are about to upload:"
+echo "  File: $FILE_PATH"
+if [ -n "$FOLDER_PATH" ]; then
+    echo "  Destination: /$FOLDER_PATH/"
+elif [ "$FOLDER_ID" != "0" ]; then
+    echo "  Destination: Folder ID $FOLDER_ID"
+else
+    echo "  Destination: Root folder (ID: 0)"
+fi
+if [ -n "$FILE_NAME" ]; then
+    echo "  As: $FILE_NAME"
+else
+    echo "  As: $(basename "$FILE_PATH")"
+fi
+echo "  User ID: $USER_ID"
+echo ""
+read -p "Do you want to continue? (y/n): " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    log "Upload cancelled by user"
+    exit 0
+fi
 
 # If folder path is specified, create the folder structure
 if [ -n "$FOLDER_PATH" ]; then

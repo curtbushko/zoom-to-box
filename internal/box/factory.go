@@ -12,6 +12,7 @@ type BoxConfig struct {
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	EnterpriseID string `yaml:"enterprise_id" json:"enterprise_id"`
 	FolderID     string `yaml:"folder_id" json:"folder_id"`
 }
 
@@ -36,6 +37,7 @@ func NewBoxClientFromConfig(config Config) (BoxClient, error) {
 	credentials := &OAuth2Credentials{
 		ClientID:     boxConfig.ClientID,
 		ClientSecret: boxConfig.ClientSecret,
+		EnterpriseID: boxConfig.EnterpriseID,
 	}
 
 	httpClient := &http.Client{
@@ -106,6 +108,7 @@ func CreateBoxClientWithCredentialsCallback(config Config, saveCredentials func(
 	credentials := &OAuth2Credentials{
 		ClientID:     boxConfig.ClientID,
 		ClientSecret: boxConfig.ClientSecret,
+		EnterpriseID: boxConfig.EnterpriseID,
 	}
 
 	httpClient := &http.Client{

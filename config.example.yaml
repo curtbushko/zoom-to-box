@@ -13,6 +13,7 @@ box:
   enabled: false  # Set to true to enable Box uploads
   client_id: "your_box_client_id"
   client_secret: "your_box_client_secret"
+  enterprise_id: "your_box_enterprise_id"
   # Note: files are uploaded to user-specific folders within the service account's root folder
 
 # Download settings
@@ -36,9 +37,10 @@ active_users:
 
 # Environment variable overrides:
 # ZOOM_ACCOUNT_ID - overrides zoom.account_id
-# ZOOM_CLIENT_ID - overrides zoom.client_id  
+# ZOOM_CLIENT_ID - overrides zoom.client_id
 # ZOOM_CLIENT_SECRET - overrides zoom.client_secret
 # ZOOM_BASE_URL - overrides zoom.base_url
 # BOX_CLIENT_ID - overrides box.client_id
 # BOX_CLIENT_SECRET - overrides box.client_secret
+# BOX_ENTERPRISE_ID - overrides box.enterprise_id
 # DOWNLOAD_OUTPUT_DIR - overrides download.output_dir

@@ -92,15 +92,111 @@ func (a *oauth2Authenticator) SetCredentialsUpdateCallback(callback func(*OAuth2
 	a.onCredentialsUpdated = callback
 }
 
+// GetAccessTokenWithClientCredentials obtains an access token using client credentials grant type
+func (a *oauth2Authenticator) GetAccessTokenWithClientCredentials(ctx context.Context) error {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	if a.credentials == nil {
+		return fmt.Errorf("no credentials available")
+	}
+
+	if a.credentials.ClientID == "" || a.credentials.ClientSecret == "" {
+		return fmt.Errorf("client_id and client_secret are required")
+	}
+
+	// Prepare token request using client credentials
+	data := url.Values{}
+	data.Set("grant_type", "client_credentials")
+	data.Set("client_id", a.credentials.ClientID)
+	data.Set("client_secret", a.credentials.ClientSecret)
+	data.Set("box_subject_type", "enterprise")
+
+	// Use enterprise_id if provided, otherwise default to "0"
+	if a.credentials.EnterpriseID != "" {
+		data.Set("box_subject_id", a.credentials.EnterpriseID)
+	} else {
+		data.Set("box_subject_id", "0")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", BoxTokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("failed to create token request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "zoom-to-box/1.0")
+
+	// Make the request
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("token request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read token response: %w", err)
+	}
+
+	// Check for errors
+	if resp.StatusCode != http.StatusOK {
+		var errorResp ErrorResponse
+		if json.Unmarshal(body, &errorResp) == nil {
+			return &BoxError{
+				StatusCode: resp.StatusCode,
+				Message:    errorResp.Message,
+				Code:       errorResp.Code,
+				RequestID:  errorResp.RequestID,
+				Retryable:  resp.StatusCode >= 500 || resp.StatusCode == 429,
+			}
+		}
+		return fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse token response
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	// Update credentials
+	a.credentials.AccessToken = tokenResp.AccessToken
+	a.credentials.ExpiresIn = tokenResp.ExpiresIn
+	a.credentials.TokenType = tokenResp.TokenType
+	a.credentials.Scope = tokenResp.Scope
+	a.credentials.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	// Client credentials flow doesn't return a refresh token
+	// Keep the existing refresh token if any
+
+	// Call update callback if set
+	if a.onCredentialsUpdated != nil {
+		if err := a.onCredentialsUpdated(a.credentials); err != nil {
+			return fmt.Errorf("failed to update stored credentials: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // RefreshToken refreshes the access token using the refresh token
 func (a *oauth2Authenticator) RefreshToken(ctx context.Context) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	
+
+	// If we have enterprise_id and no refresh token, use client credentials instead
+	if a.credentials != nil && a.credentials.EnterpriseID != "" && a.credentials.RefreshToken == "" {
+		a.mutex.Unlock() // Unlock before calling the other method which will lock
+		return a.GetAccessTokenWithClientCredentials(ctx)
+	}
+
 	if a.credentials == nil || a.credentials.RefreshToken == "" {
 		return fmt.Errorf("no refresh token available")
 	}
-	
+
 	// Prepare token refresh request
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")

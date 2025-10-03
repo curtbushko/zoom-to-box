@@ -43,6 +43,7 @@ type ProgressCallback func(bytesUploaded int64, totalBytes int64)
 type OAuth2Credentials struct {
 	ClientID     string    `json:"client_id"`
 	ClientSecret string    `json:"client_secret"`
+	EnterpriseID string    `json:"enterprise_id,omitempty"`
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	TokenType    string    `json:"token_type"`
