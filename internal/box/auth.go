@@ -36,15 +36,24 @@ type Authenticator interface {
 type AuthenticatedHTTPClient interface {
 	// Do performs an HTTP request with automatic token refresh
 	Do(req *http.Request) (*http.Response, error)
-	
+
 	// Get performs a GET request with authentication
 	Get(ctx context.Context, url string) (*http.Response, error)
-	
+
+	// GetAsUser performs a GET request with authentication as a specific user
+	GetAsUser(ctx context.Context, url string, userID string) (*http.Response, error)
+
 	// Post performs a POST request with authentication
 	Post(ctx context.Context, url string, contentType string, body io.Reader) (*http.Response, error)
-	
+
+	// PostAsUser performs a POST request with authentication as a specific user
+	PostAsUser(ctx context.Context, url string, contentType string, body io.Reader, userID string) (*http.Response, error)
+
 	// PostJSON performs a POST request with JSON body
 	PostJSON(ctx context.Context, url string, payload interface{}) (*http.Response, error)
+
+	// PostJSONAsUser performs a POST request with JSON body as a specific user
+	PostJSONAsUser(ctx context.Context, url string, payload interface{}, userID string) (*http.Response, error)
 }
 
 // oauth2Authenticator implements OAuth 2.0 authentication for Box
@@ -283,10 +292,26 @@ func (c *authenticatedHTTPClient) Get(ctx context.Context, url string) (*http.Re
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GET request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "zoom-to-box/1.0")
-	
+
+	return c.Do(req)
+}
+
+// GetAsUser performs a GET request with authentication as a specific user
+func (c *authenticatedHTTPClient) GetAsUser(ctx context.Context, url string, userID string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GET request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "zoom-to-box/1.0")
+	if userID != "" {
+		req.Header.Set("As-User", userID)
+	}
+
 	return c.Do(req)
 }
 
@@ -296,11 +321,28 @@ func (c *authenticatedHTTPClient) Post(ctx context.Context, url string, contentT
 	if err != nil {
 		return nil, fmt.Errorf("failed to create POST request: %w", err)
 	}
-	
+
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "zoom-to-box/1.0")
-	
+
+	return c.Do(req)
+}
+
+// PostAsUser performs a POST request with authentication as a specific user
+func (c *authenticatedHTTPClient) PostAsUser(ctx context.Context, url string, contentType string, body io.Reader, userID string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create POST request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "zoom-to-box/1.0")
+	if userID != "" {
+		req.Header.Set("As-User", userID)
+	}
+
 	return c.Do(req)
 }
 
@@ -310,8 +352,18 @@ func (c *authenticatedHTTPClient) PostJSON(ctx context.Context, url string, payl
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal JSON payload: %w", err)
 	}
-	
+
 	return c.Post(ctx, url, "application/json", bytes.NewReader(jsonData))
+}
+
+// PostJSONAsUser performs a POST request with JSON body as a specific user
+func (c *authenticatedHTTPClient) PostJSONAsUser(ctx context.Context, url string, payload interface{}, userID string) (*http.Response, error) {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON payload: %w", err)
+	}
+
+	return c.PostAsUser(ctx, url, "application/json", bytes.NewReader(jsonData), userID)
 }
 
 // ensureValidToken ensures we have a valid access token, refreshing if necessary

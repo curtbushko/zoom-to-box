@@ -123,12 +123,20 @@ func (um *boxUploadManager) UploadFile(ctx context.Context, localPath, videoOwne
 // UploadFileWithProgress uploads a single file to Box with progress tracking
 func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPath, videoOwner, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error) {
 	startTime := time.Now()
-	
+
 	result := &UploadResult{
 		FileName:   filepath.Base(localPath),
 		UploadDate: startTime,
 	}
-	
+
+	// Get user ID from email
+	user, err := um.client.GetUserByEmail(videoOwner)
+	if err != nil {
+		err = fmt.Errorf("failed to get user ID for email %s: %w", videoOwner, err)
+		result.Error = err
+		return result, err
+	}
+
 	// Extract username from email (videoOwner)
 	username := email.ExtractUsername(videoOwner)
 	if username == "" {
@@ -136,33 +144,33 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		result.Error = err
 		return result, err
 	}
-	
+
 	// Create folder structure: <username>/<year>/<month>/<day>
 	folderPath := createDateBasedFolderPath(username, startTime)
-	
+
 	// Report progress - creating folders
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseCreatingFolders)
 	}
-	
-	// Create folder structure with user permissions
-	folder, err := um.createFolderStructureWithPermissions(ctx, folderPath, videoOwner)
+
+	// Create folder structure as user
+	folder, err := CreateFolderPathAsUser(um.client, folderPath, um.baseFolderID, user.ID)
 	if err != nil {
-		err = fmt.Errorf("failed to create folder structure: %w", err)
+		err = fmt.Errorf("failed to create folder structure as user: %w", err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
 		}
 		return result, err
 	}
-	
+
 	result.FolderID = folder.ID
-	
+
 	// Report progress - uploading file
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseUploadingFile)
 	}
-	
+
 	// Create upload progress callback
 	var uploadProgressCallback ProgressCallback
 	if progressCallback != nil {
@@ -170,27 +178,27 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 			progressCallback(uploaded, total, PhaseUploadingFile)
 		}
 	}
-	
-	// Upload the file
-	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
+
+	// Upload the file as user
+	file, err := um.client.UploadFileAsUser(localPath, folder.ID, result.FileName, user.ID, uploadProgressCallback)
 	if err != nil {
-		err = fmt.Errorf("failed to upload file: %w", err)
+		err = fmt.Errorf("failed to upload file as user: %w", err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
 		}
 		return result, err
 	}
-	
+
 	result.FileID = file.ID
 	result.FileSize = file.Size
 	result.Success = true
-	
+
 	// Report progress - setting permissions
 	if progressCallback != nil {
 		progressCallback(result.FileSize, result.FileSize, PhaseSettingPermissions)
 	}
-	
+
 	// Set permissions for the uploaded file
 	permissionIDs, err := um.setFilePermissions(ctx, file.ID, videoOwner)
 	if err != nil {
@@ -201,15 +209,16 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		result.PermissionsSet = true
 		result.PermissionIDs = permissionIDs
 	}
-	
+
 	result.Duration = time.Since(startTime)
-	
+
 	// Report progress - completed
 	if progressCallback != nil {
 		progressCallback(result.FileSize, result.FileSize, PhaseCompleted)
 	}
-	
+
 	logging.LogUserAction("box_upload_completed", videoOwner, map[string]interface{}{
+		"user_id":         user.ID,
 		"file_id":         result.FileID,
 		"file_name":       result.FileName,
 		"file_size":       result.FileSize,
@@ -217,7 +226,7 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		"permissions_set": result.PermissionsSet,
 		"duration_ms":     result.Duration.Milliseconds(),
 	})
-	
+
 	return result, nil
 }
 
@@ -225,12 +234,12 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 // zoomEmail is used for logging/metadata, boxEmail is used for Box folder structure and permissions
 func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error) {
 	startTime := time.Now()
-	
+
 	result := &UploadResult{
 		FileName:   filepath.Base(localPath),
 		UploadDate: startTime,
 	}
-	
+
 	// Validate both emails
 	if zoomEmail == "" {
 		err := fmt.Errorf("zoom email cannot be empty")
@@ -242,7 +251,15 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		result.Error = err
 		return result, err
 	}
-	
+
+	// Get user ID from Box email
+	user, err := um.client.GetUserByEmail(boxEmail)
+	if err != nil {
+		err = fmt.Errorf("failed to get user ID for box email %s: %w", boxEmail, err)
+		result.Error = err
+		return result, err
+	}
+
 	// Extract username from Box email for folder structure
 	username := email.ExtractUsername(boxEmail)
 	if username == "" {
@@ -250,33 +267,33 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		result.Error = err
 		return result, err
 	}
-	
+
 	// Create folder structure: <box_username>/<year>/<month>/<day>
 	folderPath := createDateBasedFolderPath(username, startTime)
-	
+
 	// Report progress - creating folders
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseCreatingFolders)
 	}
-	
-	// Create folder structure with Box user permissions
-	folder, err := um.createFolderStructureWithPermissions(ctx, folderPath, boxEmail)
+
+	// Create folder structure as Box user
+	folder, err := CreateFolderPathAsUser(um.client, folderPath, um.baseFolderID, user.ID)
 	if err != nil {
-		err = fmt.Errorf("failed to create folder structure for box email %s: %w", boxEmail, err)
+		err = fmt.Errorf("failed to create folder structure for box email %s as user: %w", boxEmail, err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
 		}
 		return result, err
 	}
-	
+
 	result.FolderID = folder.ID
-	
+
 	// Report progress - uploading file
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseUploadingFile)
 	}
-	
+
 	// Create upload progress callback
 	var uploadProgressCallback ProgressCallback
 	if progressCallback != nil {
@@ -284,27 +301,27 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 			progressCallback(uploaded, total, PhaseUploadingFile)
 		}
 	}
-	
-	// Upload the file
-	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
+
+	// Upload the file as Box user
+	file, err := um.client.UploadFileAsUser(localPath, folder.ID, result.FileName, user.ID, uploadProgressCallback)
 	if err != nil {
-		err = fmt.Errorf("failed to upload file: %w", err)
+		err = fmt.Errorf("failed to upload file as user: %w", err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
 		}
 		return result, err
 	}
-	
+
 	result.FileID = file.ID
 	result.FileSize = file.Size
 	result.Success = true
-	
+
 	// Report progress - setting permissions
 	if progressCallback != nil {
 		progressCallback(result.FileSize, result.FileSize, PhaseSettingPermissions)
 	}
-	
+
 	// Set permissions for the uploaded file using Box email
 	permissionIDs, err := um.setFilePermissions(ctx, file.ID, boxEmail)
 	if err != nil {
@@ -315,18 +332,19 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		result.PermissionsSet = true
 		result.PermissionIDs = permissionIDs
 	}
-	
+
 	result.Duration = time.Since(startTime)
-	
+
 	// Report progress - completed
 	if progressCallback != nil {
 		progressCallback(result.FileSize, result.FileSize, PhaseCompleted)
 	}
-	
+
 	// Log using both emails for context
 	logging.LogUserAction("box_upload_completed_with_mapping", zoomEmail, map[string]interface{}{
 		"zoom_email":      zoomEmail,
 		"box_email":       boxEmail,
+		"box_user_id":     user.ID,
 		"file_id":         result.FileID,
 		"file_name":       result.FileName,
 		"file_size":       result.FileSize,
@@ -334,7 +352,7 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		"permissions_set": result.PermissionsSet,
 		"duration_ms":     result.Duration.Milliseconds(),
 	})
-	
+
 	return result, nil
 }
 

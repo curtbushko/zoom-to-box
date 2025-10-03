@@ -64,6 +64,62 @@ func (c *boxClient) GetCurrentUser() (*User, error) {
 	return &user, nil
 }
 
+func (c *boxClient) GetUserByEmail(email string) (*User, error) {
+	if email == "" {
+		return nil, fmt.Errorf("email cannot be empty")
+	}
+
+	// Box API requires filtering users by login (email)
+	url := fmt.Sprintf("%s/users?filter_term=%s", BoxAPIBaseURL, email)
+	resp, err := c.httpClient.Get(context.Background(), url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeUnauthorized,
+			Message:    "unauthorized - invalid or expired access token",
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get user by email, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var response struct {
+		TotalCount int     `json:"total_count"`
+		Entries    []*User `json:"entries"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode user response: %w", err)
+	}
+
+	if len(response.Entries) == 0 {
+		return nil, &BoxError{
+			StatusCode: http.StatusNotFound,
+			Code:       ErrorCodeItemNotFound,
+			Message:    fmt.Sprintf("user with email '%s' not found", email),
+			Retryable:  false,
+		}
+	}
+
+	// Find exact match by login
+	for _, user := range response.Entries {
+		if user.Login == email {
+			return user, nil
+		}
+	}
+
+	// If no exact match found, return the first result
+	return response.Entries[0], nil
+}
+
 func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("folder name cannot be empty")
@@ -98,6 +154,53 @@ func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to create folder, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var folder Folder
+	if err := json.NewDecoder(resp.Body).Decode(&folder); err != nil {
+		return nil, fmt.Errorf("failed to decode folder response: %w", err)
+	}
+
+	return &folder, nil
+}
+
+func (c *boxClient) CreateFolderAsUser(name string, parentID string, userID string) (*Folder, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("folder name cannot be empty")
+	}
+	if parentID == "" {
+		parentID = RootFolderID
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+
+	request := CreateFolderRequest{
+		Name: name,
+		Parent: &FolderParent{
+			ID: parentID,
+		},
+	}
+
+	url := fmt.Sprintf("%s/folders", BoxAPIBaseURL)
+	resp, err := c.httpClient.PostJSONAsUser(context.Background(), url, request, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create folder as user: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNameTaken,
+			Message:    fmt.Sprintf("folder '%s' already exists in parent folder", name),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create folder as user, status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var folder Folder
@@ -166,6 +269,43 @@ func (c *boxClient) ListFolderItems(folderID string) (*FolderItems, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to list folder items, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var items FolderItems
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, fmt.Errorf("failed to decode folder items response: %w", err)
+	}
+
+	return &items, nil
+}
+
+func (c *boxClient) ListFolderItemsAsUser(folderID string, userID string) (*FolderItems, error) {
+	if folderID == "" {
+		folderID = RootFolderID
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+
+	url := fmt.Sprintf("%s/folders/%s/items", BoxAPIBaseURL, folderID)
+	resp, err := c.httpClient.GetAsUser(context.Background(), url, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list folder items as user: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNotFound,
+			Message:    fmt.Sprintf("folder with ID '%s' not found", folderID),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list folder items as user, status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var items FolderItems
@@ -276,6 +416,123 @@ func (c *boxClient) UploadFileWithProgress(filePath string, parentFolderID strin
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to upload file, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var uploadResponse struct {
+		TotalCount int     `json:"total_count"`
+		Entries    []*File `json:"entries"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&uploadResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode upload response: %w", err)
+	}
+
+	if len(uploadResponse.Entries) == 0 {
+		return nil, fmt.Errorf("no file entries in upload response")
+	}
+
+	return uploadResponse.Entries[0], nil
+}
+
+func (c *boxClient) UploadFileAsUser(filePath string, parentFolderID string, fileName string, userID string, progressCallback ProgressCallback) (*File, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return nil, fmt.Errorf("file path cannot be empty")
+	}
+	if parentFolderID == "" {
+		parentFolderID = RootFolderID
+	}
+	if fileName == "" {
+		fileName = filepath.Base(filePath)
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	attributes := UploadFileRequest{
+		Name: fileName,
+		Parent: &FolderParent{
+			ID: parentFolderID,
+		},
+	}
+
+	attributesJSON, err := json.Marshal(attributes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal file attributes: %w", err)
+	}
+
+	if err := writer.WriteField("attributes", string(attributesJSON)); err != nil {
+		return nil, fmt.Errorf("failed to write attributes field: %w", err)
+	}
+
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	totalBytes := fileInfo.Size()
+	var bytesWritten int64
+
+	if progressCallback != nil {
+		progressCallback(0, totalBytes)
+	}
+
+	buffer := make([]byte, 32*1024)
+	for {
+		n, err := file.Read(buffer)
+		if n > 0 {
+			if _, writeErr := part.Write(buffer[:n]); writeErr != nil {
+				return nil, fmt.Errorf("failed to write file data: %w", writeErr)
+			}
+			bytesWritten += int64(n)
+			if progressCallback != nil {
+				progressCallback(bytesWritten, totalBytes)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/files/content", BoxUploadBaseURL)
+	resp, err := c.httpClient.PostAsUser(context.Background(), url, writer.FormDataContentType(), &body, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload file as user: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNameTaken,
+			Message:    fmt.Sprintf("file '%s' already exists in folder", fileName),
+			Retryable:  false,
+		}
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to upload file as user, status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var uploadResponse struct {
@@ -490,6 +747,58 @@ func (c *boxClient) DeleteCollaboration(collaborationID string) error {
 
 func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Folder, error) {
 	return CreateFolderPathWithPermissions(client, folderPath, parentID, nil)
+}
+
+// CreateFolderPathAsUser creates a folder path as a specific user using As-User header
+func CreateFolderPathAsUser(client BoxClient, folderPath string, parentID string, userID string) (*Folder, error) {
+	if folderPath == "" || folderPath == "/" {
+		if parentID == "" {
+			parentID = RootFolderID
+		}
+		return client.GetFolder(parentID)
+	}
+
+	if parentID == "" {
+		parentID = RootFolderID
+	}
+
+	if userID == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+
+	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
+	currentParentID := parentID
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		items, err := client.ListFolderItemsAsUser(currentParentID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list items in folder %s as user: %w", currentParentID, err)
+		}
+
+		var found *Item
+		for _, item := range items.Entries {
+			if item.Type == ItemTypeFolder && item.Name == part {
+				found = &item
+				break
+			}
+		}
+
+		if found != nil {
+			currentParentID = found.ID
+		} else {
+			folder, err := client.CreateFolderAsUser(part, currentParentID, userID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create folder '%s' in parent %s as user: %w", part, currentParentID, err)
+			}
+			currentParentID = folder.ID
+		}
+	}
+
+	return client.GetFolder(currentParentID)
 }
 
 func CreateFolderPathWithPermissions(client BoxClient, folderPath string, parentID string, userPermissions map[string]string) (*Folder, error) {

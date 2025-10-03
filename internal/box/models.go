@@ -11,21 +11,25 @@ type BoxClient interface {
 	// Authentication
 	RefreshToken() error
 	IsAuthenticated() bool
-	
+
 	// User operations
 	GetCurrentUser() (*User, error)
-	
+	GetUserByEmail(email string) (*User, error)
+
 	// Folder operations
 	CreateFolder(name string, parentID string) (*Folder, error)
+	CreateFolderAsUser(name string, parentID string, userID string) (*Folder, error)
 	GetFolder(folderID string) (*Folder, error)
 	ListFolderItems(folderID string) (*FolderItems, error)
-	
+	ListFolderItemsAsUser(folderID string, userID string) (*FolderItems, error)
+
 	// File operations
 	UploadFile(filePath string, parentFolderID string, fileName string) (*File, error)
 	UploadFileWithProgress(filePath string, parentFolderID string, fileName string, progressCallback ProgressCallback) (*File, error)
+	UploadFileAsUser(filePath string, parentFolderID string, fileName string, userID string, progressCallback ProgressCallback) (*File, error)
 	GetFile(fileID string) (*File, error)
 	DeleteFile(fileID string) error
-	
+
 	// Permission operations
 	CreateCollaboration(itemID, itemType, userEmail, role string) (*Collaboration, error)
 	ListCollaborations(itemID, itemType string) (*CollaborationsResponse, error)

@@ -50,9 +50,18 @@ func (m *mockBoxClient) IsAuthenticated() bool {
 func (m *mockBoxClient) GetCurrentUser() (*User, error) {
 	return &User{
 		ID:    "12345",
-		Type:  "user", 
+		Type:  "user",
 		Name:  "Test User",
 		Login: "test@example.com",
+	}, nil
+}
+
+func (m *mockBoxClient) GetUserByEmail(email string) (*User, error) {
+	return &User{
+		ID:    "user_" + email,
+		Type:  "user",
+		Name:  "Test User",
+		Login: email,
 	}, nil
 }
 
@@ -78,6 +87,21 @@ func (m *mockBoxClient) GetFolder(folderID string) (*Folder, error) {
 	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound}
 }
 
+func (m *mockBoxClient) CreateFolderAsUser(name string, parentID string, userID string) (*Folder, error) {
+	if m.folderError != nil {
+		return nil, m.folderError
+	}
+
+	folderID := fmt.Sprintf("folder_%s_%s_%s", parentID, name, userID)
+	folder := &Folder{
+		ID:   folderID,
+		Name: name,
+		Type: ItemTypeFolder,
+	}
+	m.folders[folderID] = folder
+	return folder, nil
+}
+
 func (m *mockBoxClient) ListFolderItems(folderID string) (*FolderItems, error) {
 	if items, exists := m.folderItems[folderID]; exists {
 		return &FolderItems{
@@ -91,6 +115,10 @@ func (m *mockBoxClient) ListFolderItems(folderID string) (*FolderItems, error) {
 	}, nil
 }
 
+func (m *mockBoxClient) ListFolderItemsAsUser(folderID string, userID string) (*FolderItems, error) {
+	return m.ListFolderItems(folderID)
+}
+
 func (m *mockBoxClient) UploadFile(filePath string, parentFolderID string, fileName string) (*File, error) {
 	return m.UploadFileWithProgress(filePath, parentFolderID, fileName, nil)
 }
@@ -99,15 +127,38 @@ func (m *mockBoxClient) UploadFileWithProgress(filePath string, parentFolderID s
 	if m.uploadError != nil {
 		return nil, m.uploadError
 	}
-	
+
 	// Simulate progress callback
 	if progressCallback != nil {
 		progressCallback(0, 1000)
 		progressCallback(500, 1000)
 		progressCallback(1000, 1000)
 	}
-	
+
 	fileID := fmt.Sprintf("file_%s_%s", parentFolderID, fileName)
+	file := &File{
+		ID:   fileID,
+		Name: fileName,
+		Type: ItemTypeFile,
+		Size: 1000,
+	}
+	m.files[fileID] = file
+	return file, nil
+}
+
+func (m *mockBoxClient) UploadFileAsUser(filePath string, parentFolderID string, fileName string, userID string, progressCallback ProgressCallback) (*File, error) {
+	if m.uploadError != nil {
+		return nil, m.uploadError
+	}
+
+	// Simulate progress callback
+	if progressCallback != nil {
+		progressCallback(0, 1000)
+		progressCallback(500, 1000)
+		progressCallback(1000, 1000)
+	}
+
+	fileID := fmt.Sprintf("file_%s_%s_%s", parentFolderID, fileName, userID)
 	file := &File{
 		ID:   fileID,
 		Name: fileName,

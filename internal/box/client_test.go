@@ -53,15 +53,37 @@ func (m *mockAuthenticatedHTTPClient) Get(ctx context.Context, url string) (*htt
 	return m.Do(req)
 }
 
+func (m *mockAuthenticatedHTTPClient) GetAsUser(ctx context.Context, url string, userID string) (*http.Response, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if userID != "" {
+		req.Header.Set("As-User", userID)
+	}
+	return m.Do(req)
+}
+
 func (m *mockAuthenticatedHTTPClient) Post(ctx context.Context, url string, contentType string, body io.Reader) (*http.Response, error) {
 	req, _ := http.NewRequestWithContext(ctx, "POST", url, body)
 	req.Header.Set("Content-Type", contentType)
 	return m.Do(req)
 }
 
+func (m *mockAuthenticatedHTTPClient) PostAsUser(ctx context.Context, url string, contentType string, body io.Reader, userID string) (*http.Response, error) {
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, body)
+	req.Header.Set("Content-Type", contentType)
+	if userID != "" {
+		req.Header.Set("As-User", userID)
+	}
+	return m.Do(req)
+}
+
 func (m *mockAuthenticatedHTTPClient) PostJSON(ctx context.Context, url string, payload interface{}) (*http.Response, error) {
 	jsonData, _ := json.Marshal(payload)
 	return m.Post(ctx, url, "application/json", bytes.NewReader(jsonData))
+}
+
+func (m *mockAuthenticatedHTTPClient) PostJSONAsUser(ctx context.Context, url string, payload interface{}, userID string) (*http.Response, error) {
+	jsonData, _ := json.Marshal(payload)
+	return m.PostAsUser(ctx, url, "application/json", bytes.NewReader(jsonData), userID)
 }
 
 func (m *mockAuthenticatedHTTPClient) setResponse(method, url string, statusCode int, responseBody string) {

@@ -8,19 +8,35 @@ set -e
 # Default values
 CONFIG_FILE="config.yaml"
 FOLDER_ID="0"
+FOLDER_PATH=""
 FILE_PATH=""
 FILE_NAME=""
+USER_ID=""
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 -f <file_path> [-c <config_file>] [-d <folder_id>] [-n <file_name>]"
+    echo "Usage: $0 -f <file_path> -u <user_id> [-c <config_file>] [-d <folder_id>] [-p <folder_path>] [-n <file_name>]"
     echo ""
     echo "Options:"
     echo "  -f <file_path>    Path to file to upload (required)"
+    echo "  -u <user_id>      Box user ID to upload as (required)"
     echo "  -c <config_file>  Path to YAML config file (default: config.yaml)"
     echo "  -d <folder_id>    Box folder ID to upload to (default: 0 for root folder)"
+    echo "  -p <folder_path>  Folder path to create (e.g., 'recordings/2024/01/15')"
     echo "  -n <file_name>    Custom file name (optional, uses original filename if not specified)"
     echo "  -h                Show this help message"
+    echo ""
+    echo "Note: Use either -d (folder_id) or -p (folder_path), not both."
+    echo ""
+    echo "Examples:"
+    echo "  # Upload to a specific folder ID"
+    echo "  $0 -f video.mp4 -u 12345678 -d 98765432"
+    echo ""
+    echo "  # Upload to a folder path (creates if doesn't exist)"
+    echo "  $0 -f video.mp4 -u 12345678 -p \"recordings/2024/01/15\""
+    echo ""
+    echo "  # Upload to root with custom name"
+    echo "  $0 -f video.mp4 -u 12345678 -n \"my-recording.mp4\""
     echo ""
     echo "The config file should be in YAML format with Box credentials:"
     echo "box:"
@@ -81,12 +97,129 @@ get_access_token() {
     fi
 }
 
+# Function to get folder by name in parent folder
+get_folder_by_name() {
+    local parent_id="$1"
+    local folder_name="$2"
+    local access_token="$3"
+    local user_id="$4"
+
+    log "Looking for folder '$folder_name' in parent $parent_id"
+
+    local response=$(curl -s -X GET "https://api.box.com/2.0/folders/$parent_id/items?fields=id,name,type&limit=1000" \
+        -H "Authorization: Bearer $access_token" \
+        -H "As-User: $user_id")
+
+    # Check if request was successful
+    if echo "$response" | grep -q '"type":"error"'; then
+        log "ERROR: Failed to list folders: $response"
+        return 1
+    fi
+
+    # Parse response to find folder with matching name
+    if command -v jq >/dev/null 2>&1; then
+        local folder_id=$(echo "$response" | jq -r ".entries[] | select(.type==\"folder\" and .name==\"$folder_name\") | .id")
+        if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
+            echo "$folder_id"
+            return 0
+        fi
+    else
+        # Fallback without jq
+        local folder_id=$(echo "$response" | grep -o "\"type\":\"folder\"[^}]*\"name\":\"$folder_name\"[^}]*\"id\":\"[^\"]*\"" | grep -o "\"id\":\"[^\"]*\"" | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+        if [ -n "$folder_id" ]; then
+            echo "$folder_id"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Function to create a folder
+create_folder() {
+    local parent_id="$1"
+    local folder_name="$2"
+    local access_token="$3"
+    local user_id="$4"
+
+    log "Creating folder '$folder_name' in parent $parent_id"
+
+    local json_body="{\"name\":\"$folder_name\",\"parent\":{\"id\":\"$parent_id\"}}"
+
+    local response=$(curl -s -X POST "https://api.box.com/2.0/folders" \
+        -H "Authorization: Bearer $access_token" \
+        -H "As-User: $user_id" \
+        -H "Content-Type: application/json" \
+        -d "$json_body")
+
+    # Check if folder was created or already exists
+    if echo "$response" | grep -q '"type":"folder"'; then
+        if command -v jq >/dev/null 2>&1; then
+            local folder_id=$(echo "$response" | jq -r '.id')
+            echo "$folder_id"
+            return 0
+        else
+            local folder_id=$(echo "$response" | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+            echo "$folder_id"
+            return 0
+        fi
+    elif echo "$response" | grep -q '"code":"item_name_in_use"'; then
+        log "Folder already exists, retrieving existing folder ID"
+        get_folder_by_name "$parent_id" "$folder_name" "$access_token" "$user_id"
+        return $?
+    else
+        log "ERROR: Failed to create folder: $response"
+        return 1
+    fi
+}
+
+# Function to create folder path (e.g., "recordings/2024/01/15")
+create_folder_path() {
+    local folder_path="$1"
+    local access_token="$2"
+    local user_id="$3"
+
+    # Start from root folder
+    local current_folder_id="0"
+
+    # Split path by / and create each folder
+    IFS='/' read -ra FOLDERS <<< "$folder_path"
+    for folder_name in "${FOLDERS[@]}"; do
+        # Skip empty folder names
+        if [ -z "$folder_name" ]; then
+            continue
+        fi
+
+        # Try to get existing folder
+        local folder_id=$(get_folder_by_name "$current_folder_id" "$folder_name" "$access_token" "$user_id")
+
+        if [ $? -eq 0 ] && [ -n "$folder_id" ]; then
+            log "Found existing folder: $folder_name (ID: $folder_id)"
+            current_folder_id="$folder_id"
+        else
+            # Create folder if it doesn't exist
+            folder_id=$(create_folder "$current_folder_id" "$folder_name" "$access_token" "$user_id")
+            if [ $? -eq 0 ] && [ -n "$folder_id" ]; then
+                log "Created folder: $folder_name (ID: $folder_id)"
+                current_folder_id="$folder_id"
+            else
+                log "ERROR: Failed to create folder: $folder_name"
+                return 1
+            fi
+        fi
+    done
+
+    echo "$current_folder_id"
+    return 0
+}
+
 # Function to upload file
 upload_file() {
     local file_path="$1"
     local folder_id="$2"
     local file_name="$3"
     local access_token="$4"
+    local user_id="$5"
 
     # Use original filename if custom name not provided
     if [ -z "$file_name" ]; then
@@ -96,6 +229,7 @@ upload_file() {
     log "Uploading file: $file_path"
     log "Destination folder ID: $folder_id"
     log "File name: $file_name"
+    log "As user: $user_id"
 
     # Create attributes JSON
     local attributes="{\"name\":\"$file_name\",\"parent\":{\"id\":\"$folder_id\"}}"
@@ -104,6 +238,7 @@ upload_file() {
     local response=$(curl -w "%{http_code}" -o /tmp/box_upload_response.json \
         -X POST "https://upload.box.com/api/2.0/files/content" \
         -H "Authorization: Bearer $access_token" \
+        -H "As-User: $user_id" \
         -F "attributes=$attributes" \
         -F "file=@$file_path" \
         --progress-bar)
@@ -147,11 +282,13 @@ upload_file() {
 }
 
 # Parse command line arguments
-while getopts "f:c:d:n:h" opt; do
+while getopts "f:u:c:d:p:n:h" opt; do
     case $opt in
         f) FILE_PATH="$OPTARG" ;;
+        u) USER_ID="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
         d) FOLDER_ID="$OPTARG" ;;
+        p) FOLDER_PATH="$OPTARG" ;;
         n) FILE_NAME="$OPTARG" ;;
         h) usage ;;
         *) usage ;;
@@ -164,9 +301,20 @@ if [ -z "$FILE_PATH" ]; then
     usage
 fi
 
+if [ -z "$USER_ID" ]; then
+    echo "ERROR: User ID is required (-u option)"
+    usage
+fi
+
 if [ ! -f "$FILE_PATH" ]; then
     echo "ERROR: File does not exist: $FILE_PATH"
     exit 1
+fi
+
+# Check that only one of folder_id or folder_path is specified
+if [ -n "$FOLDER_ID" ] && [ "$FOLDER_ID" != "0" ] && [ -n "$FOLDER_PATH" ]; then
+    echo "ERROR: Cannot specify both -d (folder_id) and -p (folder_path)"
+    usage
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -194,7 +342,18 @@ log "Starting Box upload process..."
 # Get access token using client credentials
 ACCESS_TOKEN=$(get_access_token "$CLIENT_ID" "$CLIENT_SECRET")
 
+# If folder path is specified, create the folder structure
+if [ -n "$FOLDER_PATH" ]; then
+    log "Creating folder path: $FOLDER_PATH"
+    FOLDER_ID=$(create_folder_path "$FOLDER_PATH" "$ACCESS_TOKEN" "$USER_ID")
+    if [ $? -ne 0 ] || [ -z "$FOLDER_ID" ]; then
+        log "ERROR: Failed to create folder path"
+        exit 1
+    fi
+    log "Target folder ID: $FOLDER_ID"
+fi
+
 # Upload file
-upload_file "$FILE_PATH" "$FOLDER_ID" "$FILE_NAME" "$ACCESS_TOKEN"
+upload_file "$FILE_PATH" "$FOLDER_ID" "$FILE_NAME" "$ACCESS_TOKEN" "$USER_ID"
 
 log "Box upload completed successfully!"
