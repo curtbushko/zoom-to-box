@@ -10,8 +10,12 @@ import (
 
 type BoxConfig struct {
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	AuthType     string `yaml:"auth_type" json:"auth_type"`
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	PrivateKey   string `yaml:"private_key" json:"private_key"`
+	KeyID        string `yaml:"key_id" json:"key_id"`
+	EnterpriseID string `yaml:"enterprise_id" json:"enterprise_id"`
 	FolderID     string `yaml:"folder_id" json:"folder_id"`
 }
 
@@ -33,18 +37,51 @@ func NewBoxClientFromConfig(config Config) (BoxClient, error) {
 		return nil, fmt.Errorf("box.client_secret is required when Box is enabled")
 	}
 
-	credentials := &OAuth2Credentials{
-		ClientID:     boxConfig.ClientID,
-		ClientSecret: boxConfig.ClientSecret,
-	}
-
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 	}
 
-	auth := NewOAuth2Authenticator(credentials, httpClient)
-	client := NewBoxClient(auth, httpClient)
+	var auth Authenticator
 
+	// Set default auth type if not specified
+	authType := boxConfig.AuthType
+	if authType == "" {
+		authType = "oauth"
+	}
+
+	switch authType {
+	case "oauth":
+		credentials := &OAuth2Credentials{
+			ClientID:     boxConfig.ClientID,
+			ClientSecret: boxConfig.ClientSecret,
+		}
+		auth = NewOAuth2Authenticator(credentials, httpClient)
+		
+	case "service-to-service":
+		if boxConfig.PrivateKey == "" {
+			return nil, fmt.Errorf("box.private_key is required for service-to-service authentication")
+		}
+		if boxConfig.KeyID == "" {
+			return nil, fmt.Errorf("box.key_id is required for service-to-service authentication") 
+		}
+		if boxConfig.EnterpriseID == "" {
+			return nil, fmt.Errorf("box.enterprise_id is required for service-to-service authentication")
+		}
+		
+		credentials := &ServiceToServiceCredentials{
+			ClientID:     boxConfig.ClientID,
+			ClientSecret: boxConfig.ClientSecret,
+			PrivateKey:   boxConfig.PrivateKey,
+			KeyID:        boxConfig.KeyID,
+			EnterpriseID: boxConfig.EnterpriseID,
+		}
+		auth = NewServiceToServiceAuthenticator(credentials, httpClient)
+		
+	default:
+		return nil, fmt.Errorf("unsupported box.auth_type: %s (supported: oauth, service-to-service)", authType)
+	}
+
+	client := NewBoxClient(auth, httpClient)
 	return client, nil
 }
 
@@ -137,11 +174,45 @@ func ValidateBoxConfig(config Config) error {
 		return nil
 	}
 
+	// Set default auth type if not specified
+	authType := boxConfig.AuthType
+	if authType == "" {
+		authType = "oauth"
+	}
+
+	// Validate auth type
+	validAuthTypes := map[string]bool{
+		"oauth":              true,
+		"service-to-service": true,
+	}
+	if !validAuthTypes[authType] {
+		return fmt.Errorf("box.auth_type must be one of: oauth, service-to-service")
+	}
+
+	// Validate common required fields
 	if boxConfig.ClientID == "" {
 		return fmt.Errorf("box.client_id is required when Box is enabled")
 	}
-	if boxConfig.ClientSecret == "" {
-		return fmt.Errorf("box.client_secret is required when Box is enabled")
+
+	// Validate fields based on auth type
+	switch authType {
+	case "oauth":
+		if boxConfig.ClientSecret == "" {
+			return fmt.Errorf("box.client_secret is required for OAuth authentication")
+		}
+	case "service-to-service":
+		if boxConfig.ClientSecret == "" {
+			return fmt.Errorf("box.client_secret is required for service-to-service authentication")
+		}
+		if boxConfig.PrivateKey == "" {
+			return fmt.Errorf("box.private_key is required for service-to-service authentication")
+		}
+		if boxConfig.KeyID == "" {
+			return fmt.Errorf("box.key_id is required for service-to-service authentication")
+		}
+		if boxConfig.EnterpriseID == "" {
+			return fmt.Errorf("box.enterprise_id is required for service-to-service authentication")
+		}
 	}
 
 	return nil

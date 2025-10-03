@@ -21,8 +21,18 @@ type ZoomConfig struct {
 // BoxConfig holds Box API authentication and settings
 type BoxConfig struct {
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	// AuthType specifies the authentication method: "oauth" or "service-to-service"
+	// - "oauth": Uses OAuth 2.0 authorization code flow (requires user consent)
+	// - "service-to-service": Uses JWT-based authentication with service account
+	AuthType     string `yaml:"auth_type" json:"auth_type"`
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	// PrivateKey is the RSA private key for service-to-service authentication (PEM format)
+	PrivateKey   string `yaml:"private_key" json:"private_key"`
+	// KeyID is the key ID from Box Developer Console for service-to-service authentication  
+	KeyID        string `yaml:"key_id" json:"key_id"`
+	// EnterpriseID is the enterprise ID for service-to-service authentication
+	EnterpriseID string `yaml:"enterprise_id" json:"enterprise_id"`
 }
 
 // DownloadConfig holds download-related settings
@@ -107,6 +117,9 @@ func (c *Config) setDefaults() {
 
 	// Box defaults
 	// Box.Enabled defaults to false (zero value)
+	if c.Box.AuthType == "" {
+		c.Box.AuthType = "oauth"
+	}
 
 	// Download defaults
 	if c.Download.OutputDir == "" {
@@ -157,11 +170,23 @@ func (c *Config) loadFromEnvironment() {
 		c.Zoom.BaseURL = val
 	}
 
+	if val := os.Getenv("BOX_AUTH_TYPE"); val != "" {
+		c.Box.AuthType = val
+	}
 	if val := os.Getenv("BOX_CLIENT_ID"); val != "" {
 		c.Box.ClientID = val
 	}
 	if val := os.Getenv("BOX_CLIENT_SECRET"); val != "" {
 		c.Box.ClientSecret = val
+	}
+	if val := os.Getenv("BOX_PRIVATE_KEY"); val != "" {
+		c.Box.PrivateKey = val
+	}
+	if val := os.Getenv("BOX_KEY_ID"); val != "" {
+		c.Box.KeyID = val
+	}
+	if val := os.Getenv("BOX_ENTERPRISE_ID"); val != "" {
+		c.Box.EnterpriseID = val
 	}
 
 	if val := os.Getenv("DOWNLOAD_OUTPUT_DIR"); val != "" {
@@ -202,6 +227,53 @@ func (c *Config) Validate() error {
 	}
 	if !validLogLevels[strings.ToLower(c.Logging.Level)] {
 		return fmt.Errorf("logging.level must be one of: debug, info, warn, error")
+	}
+
+	// Validate Box configuration if enabled
+	if c.Box.Enabled {
+		if err := c.validateBoxConfig(); err != nil {
+			return fmt.Errorf("box configuration validation failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validateBoxConfig validates Box-specific configuration
+func (c *Config) validateBoxConfig() error {
+	// Validate auth type
+	validAuthTypes := map[string]bool{
+		"oauth":              true,
+		"service-to-service": true,
+	}
+	if !validAuthTypes[c.Box.AuthType] {
+		return fmt.Errorf("box.auth_type must be one of: oauth, service-to-service")
+	}
+
+	// Validate common required fields
+	if c.Box.ClientID == "" {
+		return fmt.Errorf("box.client_id is required when Box is enabled")
+	}
+
+	// Validate fields based on auth type
+	switch c.Box.AuthType {
+	case "oauth":
+		if c.Box.ClientSecret == "" {
+			return fmt.Errorf("box.client_secret is required for OAuth authentication")
+		}
+	case "service-to-service":
+		if c.Box.ClientSecret == "" {
+			return fmt.Errorf("box.client_secret is required for service-to-service authentication")
+		}
+		if c.Box.PrivateKey == "" {
+			return fmt.Errorf("box.private_key is required for service-to-service authentication")
+		}
+		if c.Box.KeyID == "" {
+			return fmt.Errorf("box.key_id is required for service-to-service authentication")
+		}
+		if c.Box.EnterpriseID == "" {
+			return fmt.Errorf("box.enterprise_id is required for service-to-service authentication")
+		}
 	}
 
 	return nil
