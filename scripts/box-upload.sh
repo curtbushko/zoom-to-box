@@ -148,9 +148,9 @@ create_folder() {
 
     local json_body="{\"name\":\"$folder_name\",\"parent\":{\"id\":\"$parent_id\"}}"
 
+    # Use service account (no As-User header) since service account is co-owner of zoom folder
     local response=$(curl -s -X POST "https://api.box.com/2.0/folders" \
         -H "Authorization: Bearer $access_token" \
-        -H "As-User: $user_id" \
         -H "Content-Type: application/json" \
         -d "$json_body")
 
