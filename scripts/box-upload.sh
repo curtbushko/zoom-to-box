@@ -373,11 +373,27 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# Get the zoom folder ID
-log "Getting zoom folder ID from root"
-ZOOM_FOLDER_ID=$(get_folder_id "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
-if [ $? -ne 0 ] || [ -z "$ZOOM_FOLDER_ID" ]; then
-    log "ERROR: Failed to find zoom folder"
+# Get the zoom folder ID - use service account (no As-User header) to find shared folder
+log "Getting zoom folder ID from root using service account"
+# Call API without As-User header to use service account
+response=$(curl -s -X GET "https://api.box.com/2.0/folders/0/items?fields=id,name,type&limit=1000" \
+    -H "Authorization: Bearer $ACCESS_TOKEN")
+
+log "Root folder response (first 500 chars): ${response:0:500}"
+
+# Search for the zoom folder in the response
+if command -v jq >/dev/null 2>&1; then
+    ZOOM_FOLDER_ID=$(echo "$response" | jq -r '.entries[] | select(.type=="folder" and .name=="zoom") | .id')
+else
+    # Fallback without jq
+    if echo "$response" | grep -q '"name":"zoom"'; then
+        ZOOM_FOLDER_ID=$(echo "$response" | grep -B1 '"name":"zoom"' | grep '"id"' | head -1 | sed 's/.*"id":"\([^"]*\)".*/\1/')
+    fi
+fi
+
+if [ -z "$ZOOM_FOLDER_ID" ] || [ "$ZOOM_FOLDER_ID" = "null" ]; then
+    log "ERROR: Failed to find zoom folder in root directory"
+    log "Make sure the 'zoom' folder exists and is shared with your Box app service account"
     exit 1
 fi
 log "Zoom folder ID: $ZOOM_FOLDER_ID"
