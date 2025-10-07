@@ -174,8 +174,24 @@ create_folder() {
                 echo "$folder_id"
                 return 0
             fi
+        else
+            # Fallback without jq - extract from conflicts array
+            local folder_id=$(echo "$response" | grep -o '"conflicts":\[{"type":"folder","id":"[^"]*"' | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*"id":"\([^"]*\)".*/\1/')
+            if [ -n "$folder_id" ]; then
+                echo "$folder_id"
+                return 0
+            fi
         fi
-        log "ERROR: Folder exists but could not extract ID from response: $response"
+
+        # If we couldn't extract from conflict response, try searching for the folder
+        log "Could not extract folder ID from conflict response, searching for existing folder"
+        local existing_id=$(get_folder_id "$parent_id" "$folder_name" "$access_token" "$user_id")
+        if [ $? -eq 0 ] && [ -n "$existing_id" ]; then
+            echo "$existing_id"
+            return 0
+        fi
+
+        log "ERROR: Folder exists but could not determine its ID: $response"
         return 1
     else
         log "ERROR: Failed to create folder: $response"
