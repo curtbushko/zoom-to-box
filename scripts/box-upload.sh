@@ -175,41 +175,6 @@ create_folder() {
     fi
 }
 
-# Function to list user's root folder contents
-list_user_folders() {
-    local access_token="$1"
-    local user_id="$2"
-
-    log "Listing folders for user $user_id..."
-
-    local response=$(curl -s -X GET "https://api.box.com/2.0/folders/0/items?fields=id,name,type&limit=100" \
-        -H "Authorization: Bearer $access_token" \
-        -H "As-User: $user_id")
-
-    # Check if request was successful
-    if echo "$response" | grep -q '"type":"error"'; then
-        log "ERROR: Failed to list folders: $response"
-        return 1
-    fi
-
-    echo ""
-    echo "=== User's Root Folder Contents ==="
-    echo ""
-
-    # Parse and display folders
-    if command -v jq >/dev/null 2>&1; then
-        echo "$response" | jq -r '.entries[] | select(.type=="folder") | "  📁 \(.name) (ID: \(.id))"'
-        local folder_count=$(echo "$response" | jq '[.entries[] | select(.type=="folder")] | length')
-        echo ""
-        echo "Total folders: $folder_count"
-    else
-        # Fallback without jq - just show the raw folder data
-        echo "$response" | grep -o '"type":"folder"[^}]*"name":"[^"]*"[^}]*"id":"[^"]*"' | sed 's/.*"name":"\([^"]*\)".*"id":"\([^"]*\)".*/  📁 \1 (ID: \2)/'
-    fi
-
-    echo ""
-    return 0
-}
 
 # Function to create folder path (e.g., "recordings/2024/01/15")
 create_folder_path() {
@@ -382,9 +347,6 @@ log "Starting Box upload process..."
 
 # Get access token using client credentials
 ACCESS_TOKEN=$(get_access_token "$CLIENT_ID" "$CLIENT_SECRET" "$ENTERPRISE_ID")
-
-# List user's folders
-list_user_folders "$ACCESS_TOKEN" "$USER_ID"
 
 # Ask for confirmation
 echo "You are about to upload:"
