@@ -161,7 +161,7 @@ create_folder() {
             echo "$folder_id"
             return 0
         else
-            local folder_id=$(echo "$response" | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+            local folder_id=$(echo "$response" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"\([^"]*\)"/\1/')
             echo "$folder_id"
             return 0
         fi
@@ -176,7 +176,7 @@ create_folder() {
             fi
         else
             # Fallback without jq - extract from conflicts array
-            local folder_id=$(echo "$response" | grep -o '"conflicts":\[{"type":"folder","id":"[^"]*"' | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*"id":"\([^"]*\)".*/\1/')
+            local folder_id=$(echo "$response" | grep -o '"conflicts":\[{"type":"folder","id":"[^"]*"' | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"\([^"]*\)"/\1/')
             if [ -n "$folder_id" ]; then
                 echo "$folder_id"
                 return 0
