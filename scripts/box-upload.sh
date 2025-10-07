@@ -373,12 +373,31 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# Find the existing "zoom" folder in user's root directory
-log "Looking for 'zoom' folder in user's root directory"
-ZOOM_FOLDER_ID=$(get_folder_by_name "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
-if [ $? -ne 0 ] || [ -z "$ZOOM_FOLDER_ID" ]; then
+# Find the existing "zoom" folder using search API
+# Service accounts cannot access folder ID 0 directly, even with As-User header
+# The folder must be searched for since it's shared with the service account
+log "Searching for 'zoom' folder shared with user"
+SEARCH_RESPONSE=$(curl -s -X GET "https://api.box.com/2.0/search?query=zoom&type=folder&content_types=name" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "As-User: $USER_ID")
+
+# Check if search was successful
+if echo "$SEARCH_RESPONSE" | grep -q '"type":"error"'; then
+    log "ERROR: Failed to search for zoom folder: $SEARCH_RESPONSE"
+    exit 1
+fi
+
+# Parse response to find folder with exact name "zoom"
+if command -v jq >/dev/null 2>&1; then
+    ZOOM_FOLDER_ID=$(echo "$SEARCH_RESPONSE" | jq -r '.entries[] | select(.type=="folder" and .name=="zoom") | .id' | head -1)
+else
+    # Fallback without jq - look for exact name match
+    ZOOM_FOLDER_ID=$(echo "$SEARCH_RESPONSE" | grep -o '"type":"folder"[^}]*"name":"zoom"[^}]*"id":"[^"]*"' | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+fi
+
+if [ -z "$ZOOM_FOLDER_ID" ] || [ "$ZOOM_FOLDER_ID" = "null" ]; then
     log "ERROR: Could not find 'zoom' folder in user's Box account"
-    log "Please ensure a 'zoom' folder exists in the user's root directory"
+    log "Please ensure a 'zoom' folder exists and is shared with the service account"
     exit 1
 fi
 log "Found zoom folder (ID: $ZOOM_FOLDER_ID)"
