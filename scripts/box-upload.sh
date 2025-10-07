@@ -169,7 +169,7 @@ create_folder() {
         log "Folder already exists, extracting folder ID from conflict response"
         # Extract folder ID from the conflict response
         if command -v jq >/dev/null 2>&1; then
-            local folder_id=$(echo "$response" | jq -r '.context_info.conflicts.id // empty')
+            local folder_id=$(echo "$response" | jq -r '.context_info.conflicts[0].id // empty')
             if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
                 echo "$folder_id"
                 return 0
