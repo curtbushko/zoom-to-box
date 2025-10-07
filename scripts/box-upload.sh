@@ -99,44 +99,6 @@ get_access_token() {
     fi
 }
 
-# Function to get folder by name in parent folder
-get_folder_by_name() {
-    local parent_id="$1"
-    local folder_name="$2"
-    local access_token="$3"
-    local user_id="$4"
-
-    log "Looking for folder '$folder_name' in parent $parent_id"
-
-    local response=$(curl -s -X GET "https://api.box.com/2.0/folders/$parent_id/items?fields=id,name,type&limit=1000" \
-        -H "Authorization: Bearer $access_token" \
-        -H "As-User: $user_id")
-
-    # Check if request was successful
-    if echo "$response" | grep -q '"type":"error"'; then
-        log "ERROR: Failed to list folders: $response"
-        return 1
-    fi
-
-    # Parse response to find folder with matching name
-    if command -v jq >/dev/null 2>&1; then
-        local folder_id=$(echo "$response" | jq -r ".entries[] | select(.type==\"folder\" and .name==\"$folder_name\") | .id")
-        if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
-            echo "$folder_id"
-            return 0
-        fi
-    else
-        # Fallback without jq
-        local folder_id=$(echo "$response" | grep -o "\"type\":\"folder\"[^}]*\"name\":\"$folder_name\"[^}]*\"id\":\"[^\"]*\"" | grep -o "\"id\":\"[^\"]*\"" | head -1 | sed 's/.*"\([^"]*\)"/\1/')
-        if [ -n "$folder_id" ]; then
-            echo "$folder_id"
-            return 0
-        fi
-    fi
-
-    return 1
-}
-
 # Function to create a folder
 create_folder() {
     local parent_id="$1"
@@ -166,9 +128,17 @@ create_folder() {
             return 0
         fi
     elif echo "$response" | grep -q '"code":"item_name_in_use"'; then
-        log "Folder already exists, retrieving existing folder ID"
-        get_folder_by_name "$parent_id" "$folder_name" "$access_token" "$user_id"
-        return $?
+        log "Folder already exists, extracting folder ID from conflict response"
+        # Extract folder ID from the conflict response
+        if command -v jq >/dev/null 2>&1; then
+            local folder_id=$(echo "$response" | jq -r '.context_info.conflicts.id // empty')
+            if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
+                echo "$folder_id"
+                return 0
+            fi
+        fi
+        log "ERROR: Folder exists but could not extract ID from response: $response"
+        return 1
     else
         log "ERROR: Failed to create folder: $response"
         return 1
@@ -194,22 +164,14 @@ create_folder_path() {
             continue
         fi
 
-        # Try to get existing folder
-        local folder_id=$(get_folder_by_name "$current_folder_id" "$folder_name" "$access_token" "$user_id")
-
+        # Create folder - if it already exists, create_folder will handle it
+        folder_id=$(create_folder "$current_folder_id" "$folder_name" "$access_token" "$user_id")
         if [ $? -eq 0 ] && [ -n "$folder_id" ]; then
-            log "Found existing folder: $folder_name (ID: $folder_id)"
+            log "Using folder: $folder_name (ID: $folder_id)"
             current_folder_id="$folder_id"
         else
-            # Create folder if it doesn't exist
-            folder_id=$(create_folder "$current_folder_id" "$folder_name" "$access_token" "$user_id")
-            if [ $? -eq 0 ] && [ -n "$folder_id" ]; then
-                log "Created folder: $folder_name (ID: $folder_id)"
-                current_folder_id="$folder_id"
-            else
-                log "ERROR: Failed to create folder: $folder_name"
-                return 1
-            fi
+            log "ERROR: Failed to create folder: $folder_name"
+            return 1
         fi
     done
 
@@ -373,9 +335,14 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# Use the hardcoded "zoom" folder ID
-ZOOM_FOLDER_ID="zoom"
-log "Using zoom folder (ID: $ZOOM_FOLDER_ID)"
+# First create the zoom folder at root
+log "Creating zoom folder at root"
+ZOOM_FOLDER_ID=$(create_folder "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
+if [ $? -ne 0 ] || [ -z "$ZOOM_FOLDER_ID" ]; then
+    log "ERROR: Failed to create zoom folder"
+    exit 1
+fi
+log "Zoom folder ID: $ZOOM_FOLDER_ID"
 
 # If folder path is specified, create the folder structure within zoom folder
 if [ -n "$FOLDER_PATH" ]; then
