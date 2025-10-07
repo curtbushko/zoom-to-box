@@ -99,6 +99,44 @@ get_access_token() {
     fi
 }
 
+# Function to get folder ID by searching for a folder name in a parent folder
+get_folder_id() {
+    local parent_id="$1"
+    local folder_name="$2"
+    local access_token="$3"
+    local user_id="$4"
+
+    log "Searching for folder '$folder_name' in parent $parent_id"
+
+    # Get folder items
+    local response=$(curl -s -X GET "https://api.box.com/2.0/folders/$parent_id/items?fields=id,name,type&limit=1000" \
+        -H "Authorization: Bearer $access_token" \
+        -H "As-User: $user_id")
+
+    # Search for the folder in the response
+    if command -v jq >/dev/null 2>&1; then
+        local folder_id=$(echo "$response" | jq -r ".entries[] | select(.type==\"folder\" and .name==\"$folder_name\") | .id")
+        if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
+            log "Found folder '$folder_name' with ID: $folder_id"
+            echo "$folder_id"
+            return 0
+        fi
+    else
+        # Fallback without jq - less reliable but works
+        if echo "$response" | grep -q "\"name\":\"$folder_name\""; then
+            local folder_id=$(echo "$response" | grep -B1 "\"name\":\"$folder_name\"" | grep '"id"' | head -1 | sed 's/.*"id":"\([^"]*\)".*/\1/')
+            if [ -n "$folder_id" ]; then
+                log "Found folder '$folder_name' with ID: $folder_id"
+                echo "$folder_id"
+                return 0
+            fi
+        fi
+    fi
+
+    log "Folder '$folder_name' not found in parent $parent_id"
+    return 1
+}
+
 # Function to create a folder
 create_folder() {
     local parent_id="$1"
@@ -335,11 +373,11 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# First create the zoom folder at root
-log "Creating zoom folder at root"
-ZOOM_FOLDER_ID=$(create_folder "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
+# Get the zoom folder ID
+log "Getting zoom folder ID from root"
+ZOOM_FOLDER_ID=$(get_folder_id "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
 if [ $? -ne 0 ] || [ -z "$ZOOM_FOLDER_ID" ]; then
-    log "ERROR: Failed to create zoom folder"
+    log "ERROR: Failed to find zoom folder"
     exit 1
 fi
 log "Zoom folder ID: $ZOOM_FOLDER_ID"
