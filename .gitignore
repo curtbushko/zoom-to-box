@@ -38,4 +38,5 @@ go.work.sum
 /zoom-to-box
 /*.log
 /active_users.txt
+/config.yaml
 .claude/settings.local.json
