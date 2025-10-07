@@ -233,16 +233,14 @@ upload_file() {
     log "Uploading file: $file_path"
     log "Destination folder ID: $folder_id"
     log "File name: $file_name"
-    log "As user: $user_id"
 
     # Create attributes JSON
     local attributes="{\"name\":\"$file_name\",\"parent\":{\"id\":\"$folder_id\"}}"
 
-    # Upload file with progress
+    # Use service account (no As-User header) since service account is co-owner of zoom folder
     local response=$(curl -w "%{http_code}" -o /tmp/box_upload_response.json \
         -X POST "https://upload.box.com/api/2.0/files/content" \
         -H "Authorization: Bearer $access_token" \
-        -H "As-User: $user_id" \
         -F "attributes=$attributes" \
         -F "file=@$file_path" \
         --progress-bar)
