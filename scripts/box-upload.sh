@@ -115,7 +115,7 @@ get_folder_id() {
 
     # Search for the folder in the response
     if command -v jq >/dev/null 2>&1; then
-        local folder_id=$(echo "$response" | jq -r ".entries[] | select(.type==\"folder\" and .name==\"$folder_name\") | .id")
+        local folder_id=$(echo "$response" | jq -r ".entries[] | select(.type==\"folder\" and .name==\"$folder_name\") | .id" | head -1)
         if [ -n "$folder_id" ] && [ "$folder_id" != "null" ]; then
             log "Found folder '$folder_name' with ID: $folder_id"
             echo "$folder_id"
@@ -146,7 +146,10 @@ create_folder() {
 
     log "Creating folder '$folder_name' in parent $parent_id"
 
-    local json_body="{\"name\":\"$folder_name\",\"parent\":{\"id\":\"$parent_id\"}}"
+    # Escape special characters in folder name for JSON
+    local escaped_folder_name=$(echo "$folder_name" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+
+    local json_body="{\"name\":\"$escaped_folder_name\",\"parent\":{\"id\":\"$parent_id\"}}"
 
     # Use service account (no As-User header) since service account is co-owner of zoom folder
     local response=$(curl -s -X POST "https://api.box.com/2.0/folders" \
