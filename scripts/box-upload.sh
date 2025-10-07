@@ -216,9 +216,10 @@ create_folder_path() {
     local folder_path="$1"
     local access_token="$2"
     local user_id="$3"
+    local start_folder_id="${4:-0}"  # Optional starting folder ID, defaults to root (0)
 
-    # Start from root folder
-    local current_folder_id="0"
+    # Start from specified folder or root
+    local current_folder_id="$start_folder_id"
 
     # Split path by / and create each folder
     IFS='/' read -ra FOLDERS <<< "$folder_path"
@@ -410,15 +411,30 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# If folder path is specified, create the folder structure
+# Find the existing "zoom" folder in user's root directory
+log "Looking for 'zoom' folder in user's root directory"
+ZOOM_FOLDER_ID=$(get_folder_by_name "0" "zoom" "$ACCESS_TOKEN" "$USER_ID")
+if [ $? -ne 0 ] || [ -z "$ZOOM_FOLDER_ID" ]; then
+    log "ERROR: Could not find 'zoom' folder in user's Box account"
+    log "Please ensure a 'zoom' folder exists in the user's root directory"
+    exit 1
+fi
+log "Found zoom folder (ID: $ZOOM_FOLDER_ID)"
+
+# If folder path is specified, create the folder structure within zoom folder
 if [ -n "$FOLDER_PATH" ]; then
-    log "Creating folder path: $FOLDER_PATH"
-    FOLDER_ID=$(create_folder_path "$FOLDER_PATH" "$ACCESS_TOKEN" "$USER_ID")
+    log "Creating folder path within zoom folder: $FOLDER_PATH"
+    # Start from the zoom folder
+    FOLDER_ID=$(create_folder_path "$FOLDER_PATH" "$ACCESS_TOKEN" "$USER_ID" "$ZOOM_FOLDER_ID")
     if [ $? -ne 0 ] || [ -z "$FOLDER_ID" ]; then
         log "ERROR: Failed to create folder path"
         exit 1
     fi
     log "Target folder ID: $FOLDER_ID"
+elif [ "$FOLDER_ID" = "0" ]; then
+    # If uploading to root, use zoom folder instead
+    FOLDER_ID="$ZOOM_FOLDER_ID"
+    log "Using zoom folder as target (ID: $FOLDER_ID)"
 fi
 
 # Upload file
