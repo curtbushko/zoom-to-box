@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
@@ -119,7 +118,6 @@ type RetryStrategy interface {
 type retryStrategy struct {
 	config RetryConfig
 	random *rand.Rand
-	mutex  sync.Mutex
 }
 
 // NewRetryStrategy creates a new retry strategy with the given configuration
@@ -205,22 +203,19 @@ func (rs *retryStrategy) applyJitter(delay time.Duration) time.Duration {
 	if rs.config.JitterPercent <= 0 {
 		return delay
 	}
-	
-	rs.mutex.Lock()
-	defer rs.mutex.Unlock()
-	
+
 	// Calculate jitter range
 	jitterRange := float64(delay) * float64(rs.config.JitterPercent) / 100.0
-	
+
 	// Apply random jitter: delay ± jitterRange
 	jitter := (rs.random.Float64() - 0.5) * 2 * jitterRange
 	jitteredDelay := float64(delay) + jitter
-	
+
 	// Ensure delay is not negative
 	if jitteredDelay < 0 {
 		jitteredDelay = float64(delay) * 0.1 // Minimum 10% of original delay
 	}
-	
+
 	return time.Duration(jitteredDelay)
 }
 
@@ -329,7 +324,6 @@ type retryExecutor struct {
 	metrics       RetryMetrics
 	attemptCount  int
 	circuitBreaker *circuitBreaker
-	mutex         sync.RWMutex
 }
 
 // NewRetryExecutor creates a new retry executor
@@ -349,53 +343,43 @@ func NewRetryExecutor(strategy RetryStrategy) RetryExecutor {
 
 // Execute runs an operation with retry logic
 func (re *retryExecutor) Execute(ctx context.Context, operation func() error) error {
-	re.mutex.Lock()
 	re.attemptCount = 0
 	re.metrics = RetryMetrics{}
 	start := time.Now()
-	re.mutex.Unlock()
-	
+
 	defer func() {
-		re.mutex.Lock()
 		re.metrics.TotalDuration = time.Since(start)
-		re.mutex.Unlock()
 	}()
-	
+
 	for {
 		// Check circuit breaker
 		if re.circuitBreaker != nil && !re.circuitBreaker.AllowRequest() {
 			return fmt.Errorf("circuit breaker open: too many failures")
 		}
-		
+
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		
+
 		// Execute operation
-		re.mutex.Lock()
 		re.attemptCount++
 		currentAttempt := re.attemptCount
-		re.mutex.Unlock()
-		
+
 		err := operation()
-		
-		re.mutex.Lock()
+
 		re.metrics.TotalAttempts = currentAttempt
 		if err != nil {
 			re.metrics.LastError = err
 			re.metrics.LastErrorType = ClassifyError(err)
 		}
-		re.mutex.Unlock()
-		
+
 		// Success
 		if err == nil {
-			re.mutex.Lock()
 			re.metrics.SuccessAttempt = currentAttempt
-			re.mutex.Unlock()
-			
+
 			if re.circuitBreaker != nil {
 				re.circuitBreaker.RecordSuccess()
 			}
@@ -427,26 +411,19 @@ func (re *retryExecutor) Execute(ctx context.Context, operation func() error) er
 
 // GetMetrics returns metrics about the last execution
 func (re *retryExecutor) GetMetrics() RetryMetrics {
-	re.mutex.RLock()
-	defer re.mutex.RUnlock()
 	return re.metrics
 }
 
 // GetAttemptCount returns the current attempt count
 func (re *retryExecutor) GetAttemptCount() int {
-	re.mutex.RLock()
-	defer re.mutex.RUnlock()
 	return re.attemptCount
 }
 
 // Reset resets the executor state
 func (re *retryExecutor) Reset() {
-	re.mutex.Lock()
-	defer re.mutex.Unlock()
-	
 	re.attemptCount = 0
 	re.metrics = RetryMetrics{}
-	
+
 	if re.circuitBreaker != nil {
 		re.circuitBreaker.Reset()
 	}
@@ -459,7 +436,6 @@ type circuitBreaker struct {
 	failureCount     int
 	lastFailureTime  time.Time
 	state            circuitState
-	mutex            sync.RWMutex
 }
 
 type circuitState int
@@ -481,9 +457,6 @@ func newCircuitBreaker(failureThreshold int, recoveryTimeout time.Duration) *cir
 
 // AllowRequest checks if a request should be allowed
 func (cb *circuitBreaker) AllowRequest() bool {
-	cb.mutex.Lock()
-	defer cb.mutex.Unlock()
-	
 	switch cb.state {
 	case circuitClosed:
 		return true
@@ -503,21 +476,15 @@ func (cb *circuitBreaker) AllowRequest() bool {
 
 // RecordSuccess records a successful operation
 func (cb *circuitBreaker) RecordSuccess() {
-	cb.mutex.Lock()
-	defer cb.mutex.Unlock()
-	
 	cb.failureCount = 0
 	cb.state = circuitClosed
 }
 
 // RecordFailure records a failed operation
 func (cb *circuitBreaker) RecordFailure() {
-	cb.mutex.Lock()
-	defer cb.mutex.Unlock()
-	
 	cb.failureCount++
 	cb.lastFailureTime = time.Now()
-	
+
 	if cb.failureCount >= cb.failureThreshold {
 		cb.state = circuitOpen
 	}
@@ -525,9 +492,6 @@ func (cb *circuitBreaker) RecordFailure() {
 
 // Reset resets the circuit breaker
 func (cb *circuitBreaker) Reset() {
-	cb.mutex.Lock()
-	defer cb.mutex.Unlock()
-	
 	cb.failureCount = 0
 	cb.state = circuitClosed
 }

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -60,8 +59,7 @@ type AuthenticatedHTTPClient interface {
 type oauth2Authenticator struct {
 	credentials *OAuth2Credentials
 	httpClient  *http.Client
-	mutex       sync.RWMutex
-	
+
 	// Callbacks for credential updates
 	onCredentialsUpdated func(*OAuth2Credentials) error
 }
@@ -87,15 +85,11 @@ func NewOAuth2Authenticator(creds *OAuth2Credentials, httpClient *http.Client) A
 
 // SetCredentialsUpdateCallback sets a callback to be called when credentials are updated
 func (a *oauth2Authenticator) SetCredentialsUpdateCallback(callback func(*OAuth2Credentials) error) {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	a.onCredentialsUpdated = callback
 }
 
 // GetAccessTokenWithClientCredentials obtains an access token using client credentials grant type
 func (a *oauth2Authenticator) GetAccessTokenWithClientCredentials(ctx context.Context) error {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
 
 	if a.credentials == nil {
 		return fmt.Errorf("no credentials available")
@@ -184,12 +178,9 @@ func (a *oauth2Authenticator) GetAccessTokenWithClientCredentials(ctx context.Co
 
 // RefreshToken refreshes the access token using the refresh token
 func (a *oauth2Authenticator) RefreshToken(ctx context.Context) error {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
 
 	// If we have enterprise_id and no refresh token, use client credentials instead
 	if a.credentials != nil && a.credentials.EnterpriseID != "" && a.credentials.RefreshToken == "" {
-		a.mutex.Unlock() // Unlock before calling the other method which will lock
 		return a.GetAccessTokenWithClientCredentials(ctx)
 	}
 
@@ -267,8 +258,6 @@ func (a *oauth2Authenticator) RefreshToken(ctx context.Context) error {
 
 // GetAccessToken returns the current access token
 func (a *oauth2Authenticator) GetAccessToken() string {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
 	
 	if a.credentials == nil {
 		return ""
@@ -278,8 +267,6 @@ func (a *oauth2Authenticator) GetAccessToken() string {
 
 // IsAuthenticated returns true if we have a valid access token
 func (a *oauth2Authenticator) IsAuthenticated() bool {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
 	
 	if a.credentials == nil || a.credentials.AccessToken == "" {
 		return false
@@ -291,8 +278,6 @@ func (a *oauth2Authenticator) IsAuthenticated() bool {
 
 // GetCredentials returns a copy of the current credentials
 func (a *oauth2Authenticator) GetCredentials() *OAuth2Credentials {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
 	
 	if a.credentials == nil {
 		return nil
@@ -309,8 +294,6 @@ func (a *oauth2Authenticator) UpdateCredentials(creds *OAuth2Credentials) error 
 		return fmt.Errorf("credentials cannot be nil")
 	}
 	
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	
 	// Set expires_at if not set
 	if creds.ExpiresAt.IsZero() && creds.ExpiresIn > 0 {
@@ -325,7 +308,6 @@ func (a *oauth2Authenticator) UpdateCredentials(creds *OAuth2Credentials) error 
 type authenticatedHTTPClient struct {
 	authenticator Authenticator
 	httpClient    *http.Client
-	mutex         sync.RWMutex
 }
 
 // NewAuthenticatedHTTPClient creates a new HTTP client with OAuth authentication
@@ -464,16 +446,13 @@ func (c *authenticatedHTTPClient) PostJSONAsUser(ctx context.Context, url string
 
 // ensureValidToken ensures we have a valid access token, refreshing if necessary
 func (c *authenticatedHTTPClient) ensureValidToken(ctx context.Context) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	
 	// Check if we need to refresh the token
 	if !c.authenticator.IsAuthenticated() {
 		if err := c.authenticator.RefreshToken(ctx); err != nil {
 			return fmt.Errorf("failed to refresh token: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 

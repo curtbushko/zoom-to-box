@@ -19,6 +19,14 @@ type UserEmailMapping struct {
 	BoxEmail  string
 }
 
+// UserEntry represents a user with upload tracking information
+type UserEntry struct {
+	ZoomEmail      string // Zoom account email
+	BoxEmail       string // Box account email (may differ from Zoom email)
+	UploadComplete bool   // Whether uploads for this user are complete
+	LineNumber     int    // Original line number in file for updates
+}
+
 // ActiveUserManager defines the interface for active user list operations
 type ActiveUserManager interface {
 	IsUserActive(email string) bool
@@ -49,11 +57,10 @@ type UserStats struct {
 // activeUserManagerImpl implements the ActiveUserManager interface
 type activeUserManagerImpl struct {
 	config      ActiveUserConfig
-	users       map[string]bool                // Set of active users (by Zoom email)
-	userList    []string                       // Ordered list of Zoom emails for GetActiveUsers
-	mappings    map[string]*UserEmailMapping   // Map from Zoom email to full mapping
-	allMappings []UserEmailMapping             // Ordered list of all mappings
-	mutex       sync.RWMutex                   // Protects concurrent access
+	users       map[string]bool              // Set of active users (by Zoom email)
+	userList    []string                     // Ordered list of Zoom emails for GetActiveUsers
+	mappings    map[string]*UserEmailMapping // Map from Zoom email to full mapping
+	allMappings []UserEmailMapping           // Ordered list of all mappings
 	watcher     *fsnotify.Watcher
 	stopWatch   chan struct{}
 	stats       UserStats
@@ -110,8 +117,6 @@ func (m *activeUserManagerImpl) IsUserActive(email string) bool {
 		checkEmail = strings.ToLower(email)
 	}
 
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
 	return m.users[checkEmail]
 }
 
@@ -122,8 +127,6 @@ func (m *activeUserManagerImpl) GetActiveUsers() []string {
 		return []string{}
 	}
 
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
 	
 	// Return a copy to prevent external modification
 	result := make([]string, len(m.userList))
@@ -144,8 +147,6 @@ func (m *activeUserManagerImpl) GetUserMapping(zoomEmail string) (*UserEmailMapp
 		checkEmail = strings.ToLower(zoomEmail)
 	}
 
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
 	
 	mapping, exists := m.mappings[checkEmail]
 	if !exists {
@@ -166,8 +167,6 @@ func (m *activeUserManagerImpl) GetAllMappings() []UserEmailMapping {
 		return []UserEmailMapping{}
 	}
 
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
 	
 	// Return a copy to prevent external modification
 	result := make([]UserEmailMapping, len(m.allMappings))
@@ -177,8 +176,6 @@ func (m *activeUserManagerImpl) GetAllMappings() []UserEmailMapping {
 
 // GetStats returns statistics about the active user list
 func (m *activeUserManagerImpl) GetStats() UserStats {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
 	return m.stats
 }
 
@@ -287,7 +284,6 @@ func (m *activeUserManagerImpl) loadUserList() error {
 	}
 
 	// Update data structures atomically
-	m.mutex.Lock()
 	m.users = newUsers
 	m.userList = newUserList
 	m.mappings = newMappings
@@ -295,7 +291,6 @@ func (m *activeUserManagerImpl) loadUserList() error {
 	m.stats.TotalUsers = len(newUserList)
 	m.stats.LastUpdated = time.Now()
 	m.stats.FileSize = fileInfo.Size()
-	m.mutex.Unlock()
 
 	return nil
 }
@@ -367,17 +362,277 @@ func isValidEmail(email string) bool {
 	if email == "" {
 		return false
 	}
-	
+
 	// Check if email has leading/trailing spaces (invalid)
 	if strings.TrimSpace(email) != email {
 		return false
 	}
-	
+
 	// Check for reasonable length limit (RFC 5321 suggests 320 chars max)
 	if len(email) > 320 {
 		return false
 	}
-	
+
 	// Check for basic format using regex
 	return emailRegex.MatchString(email)
+}
+
+// ActiveUsersFile represents a file containing users with upload tracking
+type ActiveUsersFile struct {
+	FilePath string
+	Entries  []UserEntry
+	mu       sync.RWMutex
+}
+
+// LoadActiveUsersFile loads an active users file with upload tracking support
+func LoadActiveUsersFile(filePath string) (*ActiveUsersFile, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open users file: %w", err)
+	}
+	defer file.Close()
+
+	usersFile := &ActiveUsersFile{
+		FilePath: filePath,
+		Entries:  make([]UserEntry, 0),
+	}
+
+	scanner := bufio.NewScanner(file)
+	lineNumber := 0
+
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		entry, err := parseUserEntry(line, lineNumber)
+		if err != nil {
+			// Skip malformed lines
+			continue
+		}
+
+		usersFile.Entries = append(usersFile.Entries, entry)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading users file: %w", err)
+	}
+
+	return usersFile, nil
+}
+
+// parseUserEntry parses a line from the users file into a UserEntry
+func parseUserEntry(line string, lineNumber int) (UserEntry, error) {
+	parts := strings.Split(line, ",")
+
+	var zoomEmail, boxEmail string
+	var uploadComplete bool
+
+	switch len(parts) {
+	case 1:
+		// 1-column format: zoom_email (box_email defaults to zoom_email, upload_complete defaults to false)
+		zoomEmail = strings.TrimSpace(parts[0])
+		if !isValidEmail(zoomEmail) {
+			return UserEntry{}, fmt.Errorf("invalid email: %s", zoomEmail)
+		}
+		boxEmail = zoomEmail
+		uploadComplete = false
+
+	case 2:
+		// 2-column format: zoom_email,box_email (upload_complete defaults to false)
+		zoomEmail = strings.TrimSpace(parts[0])
+		boxEmail = strings.TrimSpace(parts[1])
+
+		// If box_email is empty, use zoom_email
+		if boxEmail == "" {
+			boxEmail = zoomEmail
+		}
+
+		if !isValidEmail(zoomEmail) || !isValidEmail(boxEmail) {
+			return UserEntry{}, fmt.Errorf("invalid email")
+		}
+		uploadComplete = false
+
+	case 3:
+		// 3-column format: zoom_email,box_email,upload_complete
+		zoomEmail = strings.TrimSpace(parts[0])
+		boxEmail = strings.TrimSpace(parts[1])
+		uploadCompleteStr := strings.TrimSpace(parts[2])
+
+		// If box_email is empty, use zoom_email
+		if boxEmail == "" {
+			boxEmail = zoomEmail
+		}
+
+		if !isValidEmail(zoomEmail) || !isValidEmail(boxEmail) {
+			return UserEntry{}, fmt.Errorf("invalid email")
+		}
+
+		// Parse boolean value (supports true/false, yes/no, 1/0)
+		uploadComplete = parseBool(uploadCompleteStr)
+
+	default:
+		return UserEntry{}, fmt.Errorf("invalid format: expected 1-3 columns")
+	}
+
+	return UserEntry{
+		ZoomEmail:      zoomEmail,
+		BoxEmail:       boxEmail,
+		UploadComplete: uploadComplete,
+		LineNumber:     lineNumber,
+	}, nil
+}
+
+// parseBool parses a boolean value from string (case-insensitive)
+// Supports: true/false, yes/no, 1/0
+func parseBool(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "true", "yes", "1":
+		return true
+	case "false", "no", "0":
+		return false
+	default:
+		return false // Default to false for unknown values
+	}
+}
+
+// GetIncompleteUsers returns a list of users with incomplete uploads
+func (f *ActiveUsersFile) GetIncompleteUsers() []UserEntry {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	incomplete := make([]UserEntry, 0)
+	for _, entry := range f.Entries {
+		if !entry.UploadComplete {
+			incomplete = append(incomplete, entry)
+		}
+	}
+	return incomplete
+}
+
+// UpdateUserStatus updates the upload completion status for a user
+func (f *ActiveUsersFile) UpdateUserStatus(zoomEmail string, complete bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Find the user entry
+	found := false
+	for i := range f.Entries {
+		if f.Entries[i].ZoomEmail == zoomEmail {
+			f.Entries[i].UploadComplete = complete
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("user not found: %s", zoomEmail)
+	}
+
+	// Write updates to file atomically
+	return f.writeToFileAtomic()
+}
+
+// MarkUserComplete marks a user's uploads as complete
+func (f *ActiveUsersFile) MarkUserComplete(zoomEmail string) error {
+	return f.UpdateUserStatus(zoomEmail, true)
+}
+
+// writeToFileAtomic writes the file content atomically using temp file + rename
+func (f *ActiveUsersFile) writeToFileAtomic() error {
+	// Create temporary file
+	tempFile := f.FilePath + ".tmp"
+	file, err := os.OpenFile(tempFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	// Read original file to preserve comments and empty lines
+	originalLines, err := readFileLines(f.FilePath)
+	if err != nil {
+		file.Close()
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to read original file: %w", err)
+	}
+
+	// Create a map of line numbers to updated entries
+	updates := make(map[int]UserEntry)
+	for _, entry := range f.Entries {
+		updates[entry.LineNumber] = entry
+	}
+
+	// Write file with preserved comments and updated entries
+	writer := bufio.NewWriter(file)
+	lineNumber := 0
+
+	for _, line := range originalLines {
+		lineNumber++
+
+		// Check if this line should be updated
+		if entry, exists := updates[lineNumber]; exists {
+			// Write updated entry
+			_, err := writer.WriteString(fmt.Sprintf("%s,%s,%t\n",
+				entry.ZoomEmail, entry.BoxEmail, entry.UploadComplete))
+			if err != nil {
+				file.Close()
+				os.Remove(tempFile)
+				return fmt.Errorf("failed to write entry: %w", err)
+			}
+		} else {
+			// Preserve original line (comment or empty line)
+			_, err := writer.WriteString(line + "\n")
+			if err != nil {
+				file.Close()
+				os.Remove(tempFile)
+				return fmt.Errorf("failed to write line: %w", err)
+			}
+		}
+	}
+
+	// Flush and close
+	if err := writer.Flush(); err != nil {
+		file.Close()
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to flush writer: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tempFile, f.FilePath); err != nil {
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+// readFileLines reads all lines from a file
+func readFileLines(filePath string) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	lines := make([]string, 0)
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return lines, nil
 }

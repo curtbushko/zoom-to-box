@@ -22,6 +22,9 @@ type BoxClient interface {
 	GetFolder(folderID string) (*Folder, error)
 	ListFolderItems(folderID string) (*FolderItems, error)
 	ListFolderItemsAsUser(folderID string, userID string) (*FolderItems, error)
+	FindZoomFolder() (string, error)
+	FindFolderByName(parentID string, name string) (*Folder, error)
+	FindZoomFolderByOwner(ownerEmail string) (*Folder, error)
 
 	// File operations
 	UploadFile(filePath string, parentFolderID string, fileName string) (*File, error)
@@ -29,11 +32,7 @@ type BoxClient interface {
 	UploadFileAsUser(filePath string, parentFolderID string, fileName string, userID string, progressCallback ProgressCallback) (*File, error)
 	GetFile(fileID string) (*File, error)
 	DeleteFile(fileID string) error
-
-	// Permission operations
-	CreateCollaboration(itemID, itemType, userEmail, role string) (*Collaboration, error)
-	ListCollaborations(itemID, itemType string) (*CollaborationsResponse, error)
-	DeleteCollaboration(collaborationID string) error
+	FindFileByName(folderID string, name string) (*File, error)
 }
 
 // ProgressCallback is called during file upload to report progress
@@ -73,6 +72,7 @@ type Folder struct {
 	ModifiedAt        time.Time `json:"modified_at"`
 	CreatedBy         *User     `json:"created_by,omitempty"`
 	ModifiedBy        *User     `json:"modified_by,omitempty"`
+	OwnedBy           *User     `json:"owned_by,omitempty"`
 	Parent            *Folder   `json:"parent,omitempty"`
 	ItemStatus        string    `json:"item_status"`
 	ItemCollection    *Items    `json:"item_collection,omitempty"`
@@ -162,12 +162,13 @@ type Items struct {
 
 // Item represents either a file or folder
 type Item struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Size     int64  `json:"size,omitempty"`
-	Etag     string `json:"etag"`
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size,omitempty"`
+	Etag       string `json:"etag"`
 	SequenceID string `json:"sequence_id"`
+	OwnedBy    *User  `json:"owned_by,omitempty"`
 }
 
 // FolderItems represents the response when listing folder contents
@@ -277,69 +278,4 @@ const (
 	ErrorCodeInvalidGrant      = "invalid_grant"
 	ErrorCodeUnauthorized      = "unauthorized"
 	ErrorCodeRateLimitExceeded = "rate_limit_exceeded"
-)
-
-// Permission management models
-
-// Collaboration represents a Box collaboration (permission)
-type Collaboration struct {
-	ID                string    `json:"id"`
-	Type              string    `json:"type"`
-	Role              string    `json:"role"`
-	AccessibleBy      *User     `json:"accessible_by,omitempty"`
-	Status            string    `json:"status"`
-	CanViewPath       bool      `json:"can_view_path"`
-	CreatedAt         time.Time `json:"created_at"`
-	ModifiedAt        time.Time `json:"modified_at"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-	IsAccessOnly      bool      `json:"is_access_only"`
-	InviteEmail       string    `json:"invite_email,omitempty"`
-}
-
-// CreateCollaborationRequest represents a request to create a collaboration
-type CreateCollaborationRequest struct {
-	Item         ItemReference `json:"item"`
-	AccessibleBy UserReference `json:"accessible_by"`
-	Role         string        `json:"role"`
-	CanViewPath  bool          `json:"can_view_path,omitempty"`
-}
-
-// ItemReference represents a reference to a Box item (file or folder)
-type ItemReference struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-}
-
-// UserReference represents a reference to a Box user
-type UserReference struct {
-	ID    string `json:"id,omitempty"`
-	Login string `json:"login,omitempty"`
-	Type  string `json:"type"`
-}
-
-// CollaborationsResponse represents the response when listing collaborations
-type CollaborationsResponse struct {
-	TotalCount int             `json:"total_count"`
-	Entries    []Collaboration `json:"entries"`
-	Offset     int             `json:"offset"`
-	Limit      int             `json:"limit"`
-}
-
-// Permission roles
-const (
-	RoleEditor        = "editor"
-	RoleViewer        = "viewer"
-	RoleUploader      = "uploader"
-	RoleOwner         = "owner"
-	RoleCoOwner       = "co-owner"
-	RoleViewerUploader = "viewer_uploader"
-	RolePreviewerUploader = "previewer_uploader"
-	RolePreviewer     = "previewer"
-)
-
-// Collaboration statuses
-const (
-	StatusAccepted = "accepted"
-	StatusPending  = "pending"
-	StatusRejected = "rejected"
 )

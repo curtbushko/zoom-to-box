@@ -28,10 +28,9 @@ type BoxConfig struct {
 
 // DownloadConfig holds download-related settings
 type DownloadConfig struct {
-	OutputDir       string `yaml:"output_dir" json:"output_dir"`
-	ConcurrentLimit int    `yaml:"concurrent_limit" json:"concurrent_limit"`
-	RetryAttempts   int    `yaml:"retry_attempts" json:"retry_attempts"`
-	TimeoutSeconds  int    `yaml:"timeout_seconds" json:"timeout_seconds"`
+	OutputDir      string `yaml:"output_dir" json:"output_dir"`
+	RetryAttempts  int    `yaml:"retry_attempts" json:"retry_attempts"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 // TimeoutDuration returns the timeout as a time.Duration
@@ -113,9 +112,6 @@ func (c *Config) setDefaults() {
 	if c.Download.OutputDir == "" {
 		c.Download.OutputDir = "./downloads"
 	}
-	if c.Download.ConcurrentLimit == 0 {
-		c.Download.ConcurrentLimit = 3
-	}
 	if c.Download.RetryAttempts == 0 {
 		c.Download.RetryAttempts = 3
 	}
@@ -187,9 +183,6 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate download configuration
-	if c.Download.ConcurrentLimit <= 0 {
-		return fmt.Errorf("download.concurrent_limit must be greater than 0")
-	}
 	if c.Download.RetryAttempts < 0 {
 		return fmt.Errorf("download.retry_attempts must be >= 0")
 	}

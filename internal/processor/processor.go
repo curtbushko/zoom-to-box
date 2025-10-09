@@ -1,0 +1,528 @@
+// Package processor provides user-level processing orchestration for zoom-to-box
+package processor
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/curtbushko/zoom-to-box/internal/box"
+	"github.com/curtbushko/zoom-to-box/internal/directory"
+	"github.com/curtbushko/zoom-to-box/internal/download"
+	"github.com/curtbushko/zoom-to-box/internal/email"
+	"github.com/curtbushko/zoom-to-box/internal/filename"
+	"github.com/curtbushko/zoom-to-box/internal/logging"
+	"github.com/curtbushko/zoom-to-box/internal/users"
+	"github.com/curtbushko/zoom-to-box/internal/zoom"
+)
+
+// UserProcessor defines the interface for processing users
+type UserProcessor interface {
+	// ProcessUser downloads and uploads recordings for a single user
+	ProcessUser(ctx context.Context, zoomEmail, boxEmail string) (*ProcessorResult, error)
+
+	// ProcessAllUsers processes all incomplete users from the active users file
+	ProcessAllUsers(ctx context.Context, usersFile *users.ActiveUsersFile) (*ProcessorSummary, error)
+}
+
+// ProcessorConfig holds configuration for the user processor
+type ProcessorConfig struct {
+	BaseDownloadDir   string
+	BoxEnabled        bool
+	DeleteAfterUpload bool
+	ContinueOnError   bool
+	MetaOnly          bool
+	Limit             int
+	DryRun            bool
+	Verbose           bool
+}
+
+// ProcessorResult represents the result of processing a single user
+type ProcessorResult struct {
+	ZoomEmail       string
+	BoxEmail        string
+	DownloadedCount int
+	UploadedCount   int
+	SkippedCount    int
+	ErrorCount      int
+	DeletedCount    int
+	Errors          []error
+	Duration        time.Duration
+}
+
+// ProcessorSummary represents the summary of processing multiple users
+type ProcessorSummary struct {
+	TotalUsers       int
+	ProcessedUsers   int
+	FailedUsers      int
+	TotalDownloads   int
+	TotalUploads     int
+	TotalSkipped     int
+	TotalErrors      int
+	TotalDeleted     int
+	Duration         time.Duration
+	UserResults      []*ProcessorResult
+}
+
+// ZoomClientInterface defines the methods we need from ZoomClient
+type ZoomClientInterface interface {
+	GetAllUserRecordings(ctx context.Context, userID string, params zoom.ListRecordingsParams) ([]*zoom.Recording, error)
+}
+
+// userProcessorImpl implements the UserProcessor interface
+type userProcessorImpl struct {
+	zoomClient        ZoomClientInterface
+	downloadManager   download.DownloadManager
+	dirManager        directory.DirectoryManager
+	filenameSanitizer filename.FileSanitizer
+	boxUploadManager  box.UploadManager
+	config            ProcessorConfig
+}
+
+// NewUserProcessor creates a new user processor
+func NewUserProcessor(
+	zoomClient ZoomClientInterface,
+	downloadManager download.DownloadManager,
+	dirManager directory.DirectoryManager,
+	filenameSanitizer filename.FileSanitizer,
+	boxUploadManager box.UploadManager,
+	config ProcessorConfig,
+) UserProcessor {
+	return &userProcessorImpl{
+		zoomClient:        zoomClient,
+		downloadManager:   downloadManager,
+		dirManager:        dirManager,
+		filenameSanitizer: filenameSanitizer,
+		boxUploadManager:  boxUploadManager,
+		config:            config,
+	}
+}
+
+// ProcessUser downloads and uploads recordings for a single user
+func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail string) (*ProcessorResult, error) {
+	startTime := time.Now()
+
+	result := &ProcessorResult{
+		ZoomEmail: zoomEmail,
+		BoxEmail:  boxEmail,
+		Errors:    make([]error, 0),
+	}
+
+	logger := logging.GetDefaultLogger()
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Processing user: %s (Box email: %s)", zoomEmail, boxEmail))
+	}
+
+	// Get recordings for this user
+	params := zoom.ListRecordingsParams{
+		From:     getFromDate(),
+		To:       getToDate(),
+		PageSize: 300,
+	}
+
+	recordings, err := p.zoomClient.GetAllUserRecordings(ctx, zoomEmail, params)
+	if err != nil {
+		err = fmt.Errorf("failed to get recordings for user %s: %w", zoomEmail, err)
+		result.Errors = append(result.Errors, err)
+		result.ErrorCount++
+		result.Duration = time.Since(startTime)
+
+		if logger != nil {
+			logger.ErrorWithContext(ctx, err.Error())
+		}
+
+		if !p.config.ContinueOnError {
+			return result, err
+		}
+		return result, nil // Continue with empty result
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Found %d recordings for user %s", len(recordings), zoomEmail))
+	}
+
+	// Process each recording
+	processedCount := 0
+	for _, recording := range recordings {
+		// Check limit
+		if p.config.Limit > 0 && processedCount >= p.config.Limit {
+			if logger != nil {
+				logger.InfoWithContext(ctx, fmt.Sprintf("Reached limit of %d recordings for user %s", p.config.Limit, zoomEmail))
+			}
+			break
+		}
+
+		// Process recording files
+		for _, recordingFile := range recording.RecordingFiles {
+			// Check limit again
+			if p.config.Limit > 0 && processedCount >= p.config.Limit {
+				break
+			}
+
+			// Skip if no download URL
+			if recordingFile.DownloadURL == "" {
+				continue
+			}
+
+			// Skip non-MP4 files unless we want all
+			if recordingFile.FileType != "MP4" && !p.config.MetaOnly {
+				continue
+			}
+
+			// Process this recording file
+			fileResult := p.processRecordingFile(ctx, zoomEmail, boxEmail, recording, recordingFile)
+
+			// Update counters
+			if fileResult.Downloaded {
+				result.DownloadedCount++
+			}
+			if fileResult.Uploaded {
+				result.UploadedCount++
+			}
+			if fileResult.Skipped {
+				result.SkippedCount++
+			}
+			if fileResult.Deleted {
+				result.DeletedCount++
+			}
+			if fileResult.Error != nil {
+				result.ErrorCount++
+				result.Errors = append(result.Errors, fileResult.Error)
+
+				// Stop processing this user if not continuing on error
+				if !p.config.ContinueOnError {
+					result.Duration = time.Since(startTime)
+					return result, fileResult.Error
+				}
+			}
+
+			processedCount++
+		}
+	}
+
+	result.Duration = time.Since(startTime)
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Completed processing user %s: %d downloaded, %d uploaded, %d skipped, %d deleted, %d errors in %v",
+			zoomEmail, result.DownloadedCount, result.UploadedCount, result.SkippedCount, result.DeletedCount, result.ErrorCount, result.Duration))
+	}
+
+	return result, nil
+}
+
+// recordingFileResult represents the result of processing a single recording file
+type recordingFileResult struct {
+	Downloaded bool
+	Uploaded   bool
+	Skipped    bool
+	Deleted    bool
+	Error      error
+}
+
+// processRecordingFile processes a single recording file (download, upload, delete)
+func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail, boxEmail string, recording *zoom.Recording, recordingFile zoom.RecordingFile) *recordingFileResult {
+	result := &recordingFileResult{}
+	logger := logging.GetDefaultLogger()
+
+	// Extract username from Box email for directory structure
+	username := email.ExtractUsername(boxEmail)
+	if username == "" {
+		result.Error = fmt.Errorf("invalid box email format: %s", boxEmail)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result
+	}
+
+	// Create directory path
+	meetingTime := recording.StartTime
+	dirPath := filepath.Join(p.config.BaseDownloadDir, username,
+		fmt.Sprintf("%04d", meetingTime.Year()),
+		fmt.Sprintf("%02d", int(meetingTime.Month())),
+		fmt.Sprintf("%02d", meetingTime.Day()))
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		result.Error = fmt.Errorf("failed to create directory %s: %w", dirPath, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result
+	}
+
+	// Generate filename
+	meetingFileName := p.filenameSanitizer.SanitizeTopic(recording.Topic)
+	timeStr := p.filenameSanitizer.FormatTime(meetingTime)
+	filename := fmt.Sprintf("%s-%s.%s", meetingFileName, timeStr, strings.ToLower(recordingFile.FileType))
+	filePath := filepath.Join(dirPath, filename)
+
+	// Check if file already exists locally
+	if _, err := os.Stat(filePath); err == nil {
+		if p.config.Verbose && logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped (already exists locally): %s", filename))
+		}
+		result.Skipped = true
+		return result
+	}
+
+	// Skip if meta-only mode and this is not a metadata file
+	if p.config.MetaOnly && recordingFile.FileType == "MP4" {
+		if p.config.Verbose && logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped (meta-only mode): %s", filename))
+		}
+		result.Skipped = true
+		return result
+	}
+
+	// Skip download if dry run
+	if p.config.DryRun {
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Would download: %s", filename))
+		}
+		result.Downloaded = true
+		return result
+	}
+
+	// Download the file
+	downloadReq := download.DownloadRequest{
+		ID:          fmt.Sprintf("%s-%s", recording.UUID, recordingFile.ID),
+		URL:         recordingFile.DownloadURL,
+		Destination: filePath,
+		FileSize:    recordingFile.FileSize,
+		Headers:     make(map[string]string),
+		Metadata: map[string]interface{}{
+			"user_email":    zoomEmail,
+			"meeting_id":    recording.UUID,
+			"meeting_topic": recording.Topic,
+			"file_type":     recordingFile.FileType,
+			"filename":      filename,
+		},
+	}
+
+	downloadResult, err := p.downloadManager.Download(ctx, downloadReq, nil)
+	if err != nil {
+		result.Error = fmt.Errorf("download failed for %s: %w", filename, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result
+	}
+
+	result.Downloaded = true
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Downloaded: %s (%d bytes)", filename, downloadResult.BytesDownloaded))
+	}
+
+	// Upload to Box if enabled
+	if p.config.BoxEnabled && p.boxUploadManager != nil {
+		uploadResult, uploadErr := p.uploadToBox(ctx, filePath, boxEmail, recordingFile.FileType, meetingTime)
+		if uploadErr != nil {
+			result.Error = uploadErr
+			// Don't delete file if upload failed
+			return result
+		}
+
+		if uploadResult.Skipped {
+			result.Skipped = true
+		} else {
+			result.Uploaded = true
+		}
+
+		// Delete local file after successful upload (if configured)
+		if p.config.DeleteAfterUpload && uploadResult.Uploaded {
+			if err := os.Remove(filePath); err != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to delete file after upload: %s - %v", filePath, err))
+				}
+			} else {
+				result.Deleted = true
+				if logger != nil {
+					logger.InfoWithContext(ctx, fmt.Sprintf("Deleted local file after upload: %s", filename))
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// uploadResult represents the result of a Box upload
+type uploadResult struct {
+	Uploaded bool
+	Skipped  bool
+	Error    error
+}
+
+// uploadToBox uploads a file to Box with check-before-upload logic
+// Uses the recording time (from Zoom metadata) to determine the Box folder structure
+func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail, fileType string, recordingTime time.Time) (*uploadResult, error) {
+	logger := logging.GetDefaultLogger()
+	result := &uploadResult{}
+
+	// Get Box client from upload manager
+	boxClient := p.boxUploadManager.GetBoxClient()
+
+	// Find the user's zoom folder in Box using their email
+	zoomFolder, err := boxClient.FindZoomFolderByOwner(boxEmail)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to find zoom folder for user %s: %w", boxEmail, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Found zoom folder for %s: %s", boxEmail, zoomFolder.ID))
+	}
+
+	// Set the upload manager's base folder to the user's zoom folder
+	// This ensures files are uploaded to: zoomFolder/<year>/<month>/<day>/
+	p.boxUploadManager.SetBaseFolderID(zoomFolder.ID)
+
+	// Use recording time (from Zoom metadata) to create folder structure
+	// Create folder path: <year>/<month>/<day> (within user's zoom folder)
+	folderPath := fmt.Sprintf("%04d/%02d/%02d",
+		recordingTime.Year(),
+		int(recordingTime.Month()),
+		recordingTime.Day())
+
+	// Create/get the folder structure using the user's zoom folder as parent
+	folder, err := box.CreateFolderPath(boxClient, folderPath, zoomFolder.ID)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to create Box folder structure: %w", err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	fileName := filepath.Base(localPath)
+
+	// Check if file already exists in Box (check-before-upload)
+	existingFile, err := boxClient.FindFileByName(folder.ID, fileName)
+	if err == nil && existingFile != nil {
+		// File already exists in Box - skip upload
+		result.Skipped = true
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped Box upload (file already exists): %s", fileName))
+		}
+		return result, nil
+	}
+
+	// File doesn't exist - proceed with upload
+	// The upload manager will use the baseFolderID (zoomFolder.ID) we set above
+	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMapping(ctx, localPath, boxEmail, boxEmail, fmt.Sprintf("upload-%s", fileName), nil)
+	if err != nil {
+		result.Error = fmt.Errorf("Box upload failed for %s: %w", fileName, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	result.Uploaded = true
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", fileName, uploadResult.FileID))
+	}
+
+	return result, nil
+}
+
+// ProcessAllUsers processes all incomplete users from the active users file
+func (p *userProcessorImpl) ProcessAllUsers(ctx context.Context, usersFile *users.ActiveUsersFile) (*ProcessorSummary, error) {
+	startTime := time.Now()
+	logger := logging.GetDefaultLogger()
+
+	summary := &ProcessorSummary{
+		UserResults: make([]*ProcessorResult, 0),
+	}
+
+	// Get incomplete users
+	incompleteUsers := usersFile.GetIncompleteUsers()
+	summary.TotalUsers = len(incompleteUsers)
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Processing %d incomplete users", summary.TotalUsers))
+	}
+
+	// Process each user serially
+	for _, userEntry := range incompleteUsers {
+		select {
+		case <-ctx.Done():
+			return summary, ctx.Err()
+		default:
+		}
+
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Processing user: %s → %s", userEntry.ZoomEmail, userEntry.BoxEmail))
+		}
+
+		// Process the user
+		userResult, err := p.ProcessUser(ctx, userEntry.ZoomEmail, userEntry.BoxEmail)
+		summary.UserResults = append(summary.UserResults, userResult)
+
+		// Update summary counters
+		summary.TotalDownloads += userResult.DownloadedCount
+		summary.TotalUploads += userResult.UploadedCount
+		summary.TotalSkipped += userResult.SkippedCount
+		summary.TotalErrors += userResult.ErrorCount
+		summary.TotalDeleted += userResult.DeletedCount
+
+		if err != nil || userResult.ErrorCount > 0 {
+			summary.FailedUsers++
+
+			// Stop processing if not continuing on error
+			if !p.config.ContinueOnError {
+				summary.Duration = time.Since(startTime)
+				return summary, fmt.Errorf("user processing failed for %s: %w", userEntry.ZoomEmail, err)
+			}
+
+			// Mark upload_complete as false (user had errors)
+			if markErr := usersFile.UpdateUserStatus(userEntry.ZoomEmail, false); markErr != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to update user status for %s: %v", userEntry.ZoomEmail, markErr))
+				}
+			}
+		} else {
+			summary.ProcessedUsers++
+
+			// Mark user as complete
+			if err := usersFile.MarkUserComplete(userEntry.ZoomEmail); err != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to mark user complete %s: %v", userEntry.ZoomEmail, err))
+				}
+			} else {
+				if logger != nil {
+					logger.InfoWithContext(ctx, fmt.Sprintf("Marked user complete: %s", userEntry.ZoomEmail))
+				}
+			}
+		}
+	}
+
+	summary.Duration = time.Since(startTime)
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Completed processing all users: %d processed, %d failed, %d total downloads, %d total uploads, %d total deleted in %v",
+			summary.ProcessedUsers, summary.FailedUsers, summary.TotalDownloads, summary.TotalUploads, summary.TotalDeleted, summary.Duration))
+	}
+
+	return summary, nil
+}
+
+// Helper functions
+
+// getFromDate returns the start date for fetching recordings (30 days ago)
+func getFromDate() *time.Time {
+	from := time.Now().AddDate(0, 0, -30)
+	return &from
+}
+
+// getToDate returns the end date for fetching recordings (today)
+func getToDate() *time.Time {
+	to := time.Now()
+	return &to
+}

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -234,7 +233,7 @@ func TestChecksumHandling(t *testing.T) {
 	}
 }
 
-func TestConcurrentAccess(t *testing.T) {
+func TestSerialAccess(t *testing.T) {
 	tempDir := t.TempDir()
 	statusFile := filepath.Join(tempDir, "status.json")
 
@@ -244,48 +243,38 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 	defer tracker.Close()
 
-	// Test concurrent read/write operations
-	numGoroutines := 50
-	var wg sync.WaitGroup
+	// Test serial read/write operations
+	numOperations := 50
 
-	// Concurrent writes
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			downloadID := fmt.Sprintf("concurrent_%d", id)
-			status := DownloadEntry{
-				Status:      StatusPending,
-				FilePath:    fmt.Sprintf("file_%d.mp4", id),
-				FileSize:    int64(id * 1000),
-				LastAttempt: time.Now().UTC(),
-			}
-			
-			err := tracker.UpdateDownloadStatus(downloadID, status)
-			if err != nil {
-				t.Errorf("Concurrent update failed: %v", err)
-			}
-		}(i)
+	// Serial writes
+	for i := 0; i < numOperations; i++ {
+		downloadID := fmt.Sprintf("serial_%d", i)
+		status := DownloadEntry{
+			Status:      StatusPending,
+			FilePath:    fmt.Sprintf("file_%d.mp4", i),
+			FileSize:    int64(i * 1000),
+			LastAttempt: time.Now().UTC(),
+		}
+
+		err := tracker.UpdateDownloadStatus(downloadID, status)
+		if err != nil {
+			t.Errorf("Serial update failed: %v", err)
+		}
 	}
 
-	// Concurrent reads
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			downloadID := fmt.Sprintf("concurrent_%d", id)
-			
-			// Try to read, may or may not exist depending on timing
-			_, _ = tracker.GetDownloadStatus(downloadID)
-		}(i)
+	// Serial reads
+	for i := 0; i < numOperations; i++ {
+		downloadID := fmt.Sprintf("serial_%d", i)
+		_, exists := tracker.GetDownloadStatus(downloadID)
+		if !exists {
+			t.Errorf("Expected download %s to exist", downloadID)
+		}
 	}
-
-	wg.Wait()
 
 	// Verify all writes completed
 	allDownloads := tracker.GetAllDownloads()
-	if len(allDownloads) != numGoroutines {
-		t.Errorf("Expected %d downloads, got %d", numGoroutines, len(allDownloads))
+	if len(allDownloads) != numOperations {
+		t.Errorf("Expected %d downloads, got %d", numOperations, len(allDownloads))
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -26,14 +25,12 @@ const (
 
 // BoxUploadInfo represents Box upload information
 type BoxUploadInfo struct {
-	Uploaded        bool      `json:"uploaded"`
-	FileID          string    `json:"file_id,omitempty"`
-	FolderID        string    `json:"folder_id,omitempty"`
-	UploadDate      time.Time `json:"upload_date,omitempty"`
-	PermissionsSet  bool      `json:"permissions_set"`
-	PermissionIDs   []string  `json:"permission_ids,omitempty"`
-	UploadRetries   int       `json:"upload_retries"`
-	UploadError     string    `json:"upload_error,omitempty"`
+	Uploaded          bool      `json:"uploaded"`
+	FileID            string    `json:"file_id,omitempty"`
+	FolderID          string    `json:"folder_id,omitempty"`
+	UploadDate        time.Time `json:"upload_date,omitempty"`
+	UploadRetries     int       `json:"upload_retries"`
+	UploadError       string    `json:"upload_error,omitempty"`
 	LastUploadAttempt time.Time `json:"last_upload_attempt,omitempty"`
 }
 
@@ -81,7 +78,6 @@ type StatusTracker interface {
 	MarkBoxUploadStarted(downloadID, folderID string) error
 	MarkBoxUploadCompleted(downloadID, fileID string) error
 	MarkBoxUploadFailed(downloadID, errorMsg string) error
-	MarkBoxPermissionsSet(downloadID string, permissionIDs []string) error
 	GetPendingBoxUploads() map[string]DownloadEntry
 	GetFailedBoxUploads() map[string]DownloadEntry
 	
@@ -95,7 +91,6 @@ type StatusTracker interface {
 type statusTrackerImpl struct {
 	statusFile string
 	data       StatusFile
-	mutex      sync.RWMutex
 }
 
 // NewStatusTracker creates a new status tracker with the given status file path
@@ -111,7 +106,6 @@ func NewStatusTracker(statusFile string) (StatusTracker, error) {
 			LastUpdated: time.Now().UTC(),
 			Downloads:   make(map[string]DownloadEntry),
 		},
-		mutex: sync.RWMutex{},
 	}
 	
 	// Create directory if it doesn't exist
@@ -133,8 +127,6 @@ func NewStatusTracker(statusFile string) (StatusTracker, error) {
 
 // UpdateDownloadStatus updates or creates a download status entry
 func (st *statusTrackerImpl) UpdateDownloadStatus(downloadID string, entry DownloadEntry) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	st.data.Downloads[downloadID] = entry
 	st.data.LastUpdated = time.Now().UTC()
@@ -144,8 +136,6 @@ func (st *statusTrackerImpl) UpdateDownloadStatus(downloadID string, entry Downl
 
 // GetDownloadStatus retrieves a download status entry
 func (st *statusTrackerImpl) GetDownloadStatus(downloadID string) (DownloadEntry, bool) {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	return entry, exists
@@ -153,8 +143,6 @@ func (st *statusTrackerImpl) GetDownloadStatus(downloadID string) (DownloadEntry
 
 // DeleteDownloadStatus removes a download status entry
 func (st *statusTrackerImpl) DeleteDownloadStatus(downloadID string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	delete(st.data.Downloads, downloadID)
 	st.data.LastUpdated = time.Now().UTC()
@@ -164,8 +152,6 @@ func (st *statusTrackerImpl) DeleteDownloadStatus(downloadID string) error {
 
 // GetAllDownloads returns all download entries
 func (st *statusTrackerImpl) GetAllDownloads() map[string]DownloadEntry {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	// Return a copy to prevent external modification
 	result := make(map[string]DownloadEntry, len(st.data.Downloads))
@@ -178,8 +164,6 @@ func (st *statusTrackerImpl) GetAllDownloads() map[string]DownloadEntry {
 
 // GetDownloadsByStatus returns downloads filtered by status
 func (st *statusTrackerImpl) GetDownloadsByStatus(status DownloadStatusType) map[string]DownloadEntry {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	result := make(map[string]DownloadEntry)
 	for id, entry := range st.data.Downloads {
@@ -193,8 +177,6 @@ func (st *statusTrackerImpl) GetDownloadsByStatus(status DownloadStatusType) map
 
 // GetIncompleteDownloads returns downloads that are not completed
 func (st *statusTrackerImpl) GetIncompleteDownloads() map[string]DownloadEntry {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	result := make(map[string]DownloadEntry)
 	for id, entry := range st.data.Downloads {
@@ -208,8 +190,6 @@ func (st *statusTrackerImpl) GetIncompleteDownloads() map[string]DownloadEntry {
 
 // SaveToFile saves the current status to file
 func (st *statusTrackerImpl) SaveToFile() error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	return st.saveToFileUnsafe()
 }
@@ -239,8 +219,6 @@ func (st *statusTrackerImpl) saveToFileUnsafe() error {
 
 // LoadFromFile loads status from file
 func (st *statusTrackerImpl) LoadFromFile() error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	// Check if file exists
 	if _, err := os.Stat(st.statusFile); os.IsNotExist(err) {
@@ -305,8 +283,6 @@ func VerifyFileChecksum(filePath, expectedChecksum string) (bool, error) {
 
 // UpdateDownloadProgress is a convenience method to update download progress
 func (st *statusTrackerImpl) UpdateDownloadProgress(downloadID string, bytesDownloaded int64, status DownloadStatusType) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -330,8 +306,6 @@ func (st *statusTrackerImpl) UpdateDownloadProgress(downloadID string, bytesDown
 
 // IncrementRetryCount increments the retry count for a download
 func (st *statusTrackerImpl) IncrementRetryCount(downloadID string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -349,8 +323,6 @@ func (st *statusTrackerImpl) IncrementRetryCount(downloadID string) error {
 
 // SetDownloadError sets an error message for a download
 func (st *statusTrackerImpl) SetDownloadError(downloadID string, errorMsg string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -369,8 +341,6 @@ func (st *statusTrackerImpl) SetDownloadError(downloadID string, errorMsg string
 
 // GetStatusSummary returns a summary of download statuses
 func (st *statusTrackerImpl) GetStatusSummary() map[DownloadStatusType]int {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	summary := make(map[DownloadStatusType]int)
 	
@@ -600,8 +570,6 @@ func (stm *StatusTrackerWithManager) StartDownloadWithTracking(ctx context.Conte
 
 // UpdateBoxUploadStatus updates the Box upload information for a download entry
 func (st *statusTrackerImpl) UpdateBoxUploadStatus(downloadID string, boxInfo BoxUploadInfo) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -617,8 +585,6 @@ func (st *statusTrackerImpl) UpdateBoxUploadStatus(downloadID string, boxInfo Bo
 
 // GetBoxUploadStatus returns the Box upload status for a download entry
 func (st *statusTrackerImpl) GetBoxUploadStatus(downloadID string) (*BoxUploadInfo, error) {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -630,8 +596,6 @@ func (st *statusTrackerImpl) GetBoxUploadStatus(downloadID string) (*BoxUploadIn
 
 // MarkBoxUploadStarted marks that a Box upload has started for a download entry
 func (st *statusTrackerImpl) MarkBoxUploadStarted(downloadID, folderID string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -653,8 +617,6 @@ func (st *statusTrackerImpl) MarkBoxUploadStarted(downloadID, folderID string) e
 
 // MarkBoxUploadCompleted marks that a Box upload has completed successfully
 func (st *statusTrackerImpl) MarkBoxUploadCompleted(downloadID, fileID string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -678,8 +640,6 @@ func (st *statusTrackerImpl) MarkBoxUploadCompleted(downloadID, fileID string) e
 
 // MarkBoxUploadFailed marks that a Box upload has failed
 func (st *statusTrackerImpl) MarkBoxUploadFailed(downloadID, errorMsg string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
 	
 	entry, exists := st.data.Downloads[downloadID]
 	if !exists {
@@ -701,33 +661,8 @@ func (st *statusTrackerImpl) MarkBoxUploadFailed(downloadID, errorMsg string) er
 	return st.saveToFileUnsafe()
 }
 
-// MarkBoxPermissionsSet marks that Box permissions have been set for uploaded file
-func (st *statusTrackerImpl) MarkBoxPermissionsSet(downloadID string, permissionIDs []string) error {
-	st.mutex.Lock()
-	defer st.mutex.Unlock()
-	
-	entry, exists := st.data.Downloads[downloadID]
-	if !exists {
-		return fmt.Errorf("download %s not found", downloadID)
-	}
-	
-	if entry.Box == nil {
-		return fmt.Errorf("no Box upload info found for download %s", downloadID)
-	}
-	
-	entry.Box.PermissionsSet = true
-	entry.Box.PermissionIDs = permissionIDs
-	
-	st.data.Downloads[downloadID] = entry
-	st.data.LastUpdated = time.Now().UTC()
-	
-	return st.saveToFileUnsafe()
-}
-
 // GetPendingBoxUploads returns downloads that are completed but not uploaded to Box
 func (st *statusTrackerImpl) GetPendingBoxUploads() map[string]DownloadEntry {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	result := make(map[string]DownloadEntry)
 	for id, entry := range st.data.Downloads {
@@ -741,8 +676,6 @@ func (st *statusTrackerImpl) GetPendingBoxUploads() map[string]DownloadEntry {
 
 // GetFailedBoxUploads returns downloads with failed Box uploads that can be retried
 func (st *statusTrackerImpl) GetFailedBoxUploads() map[string]DownloadEntry {
-	st.mutex.RLock()
-	defer st.mutex.RUnlock()
 	
 	result := make(map[string]DownloadEntry)
 	for id, entry := range st.data.Downloads {

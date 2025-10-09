@@ -163,7 +163,6 @@ func TestConfigValidation(t *testing.T) {
 					BaseURL:      "https://api.zoom.us/v2",
 				},
 				Download: DownloadConfig{
-					ConcurrentLimit: 3,
 					RetryAttempts:   3,
 					TimeoutSeconds:  300,
 				},
@@ -204,11 +203,10 @@ func TestConfigValidation(t *testing.T) {
 					ClientSecret: "test_secret",
 				},
 				Download: DownloadConfig{
-					ConcurrentLimit: 0,
 				},
 			},
 			shouldError: true,
-			errorMsg:    "download.concurrent_limit must be greater than 0",
+			errorMsg:    "download.timeout_seconds must be greater than 0",
 		},
 		{
 			name: "invalid retry attempts",
@@ -219,7 +217,6 @@ func TestConfigValidation(t *testing.T) {
 					ClientSecret: "test_secret",
 				},
 				Download: DownloadConfig{
-					ConcurrentLimit: 3,
 					RetryAttempts:   -1,
 				},
 			},
@@ -275,7 +272,6 @@ zoom:
 				},
 				Download: DownloadConfig{
 					OutputDir:       "./downloads",
-					ConcurrentLimit: 3,
 					RetryAttempts:   3,
 					TimeoutSeconds:  300,
 				},
@@ -312,9 +308,6 @@ zoom:
 			// Check defaults were applied
 			if config.Download.OutputDir != tt.expectedConfig.Download.OutputDir {
 				t.Errorf("Expected default OutputDir %s, got %s", tt.expectedConfig.Download.OutputDir, config.Download.OutputDir)
-			}
-			if config.Download.ConcurrentLimit != tt.expectedConfig.Download.ConcurrentLimit {
-				t.Errorf("Expected default ConcurrentLimit %d, got %d", tt.expectedConfig.Download.ConcurrentLimit, config.Download.ConcurrentLimit)
 			}
 			if config.Logging.Level != tt.expectedConfig.Logging.Level {
 				t.Errorf("Expected default Logging Level %s, got %s", tt.expectedConfig.Logging.Level, config.Logging.Level)
@@ -380,7 +373,6 @@ func TestLogLevelValidation(t *testing.T) {
 					ClientSecret: "test_secret",
 				},
 				Download: DownloadConfig{
-					ConcurrentLimit: 3,
 					RetryAttempts:   3,
 					TimeoutSeconds:  300,
 				},
@@ -404,9 +396,8 @@ func TestLogLevelValidation(t *testing.T) {
 				ClientSecret: "test_secret",
 			},
 			Download: DownloadConfig{
-				ConcurrentLimit: 3,
-				RetryAttempts:   3,
-				TimeoutSeconds:  300,
+				RetryAttempts:  3,
+				TimeoutSeconds: 300,
 			},
 			Logging: LoggingConfig{
 				Level: "invalid",

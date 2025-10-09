@@ -96,7 +96,7 @@ func TestHTTPClientAuthIntegration(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	t.Log("✅ HTTP client and authentication integration test completed successfully")
+	t.Log("HTTP client and authentication integration test completed successfully")
 }
 
 // TestRetryClientWithAuthentication tests the retry client configuration integration
@@ -162,5 +162,5 @@ func TestRetryClientWithAuthentication(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	t.Log("✅ Retry client with authentication configuration test completed successfully")
+	t.Log("Retry client with authentication configuration test completed successfully")
 }

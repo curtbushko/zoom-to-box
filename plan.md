@@ -1284,12 +1284,55 @@ go build ./cmd/zoom-to-box                        # Build complete application
 make build && make test && make vet               # Run all quality gates
 ```
 
-### Feature 4.4: Drive Folder Management with Permission Control
-- [ ] Create folder structure matching local directory layout
-- [ ] Handle existing folder detection
-- [ ] Support shared drives and personal drives
-- [ ] Implement granular permission management for files and folders
-- [ ] Set video owner as the only user with access to their recordings
+### Feature 4.4: Box Folder and File Management Enhancements
+- [ ] Implement check-before-create for folders to avoid unnecessary API calls
+- [ ] Implement check-before-upload for files to avoid duplicate uploads
+- [ ] Add FindFolderByName functionality to search for existing folders
+- [ ] Add FindFileByName functionality to search for existing files in a folder
+- [ ] Support user-specific zoom folder selection based on folder ownership
+- [ ] Add GetFolderByOwner to find folders owned by specific users
+- [ ] Implement smart folder reuse (check existence before creation)
+- [ ] Implement smart file reuse (check existence before upload)
+- [ ] Handle 409 conflicts gracefully by returning existing resource IDs
+
+**Folder Management Features (matching box-upload.sh):**
+- **Check Before Create**: Search for existing folders before attempting creation
+  - Reduces API calls and avoids unnecessary 409 conflicts
+  - Returns existing folder ID if folder already exists
+  - Only creates folder if it doesn't exist
+
+- **User Folder Ownership**: Select zoom folder based on user ownership
+  - Multiple "zoom" folders may exist in root directory
+  - Each zoom folder is owned by a different user
+  - Script/code selects zoom folder where owner matches the username
+  - Uses Box API owned_by field to determine folder ownership
+
+- **Folder Path Creation**: Create nested folder structures efficiently
+  - Check each folder level for existence before creating
+  - Reuse existing folders at each level
+  - Only create missing folders in the path
+  - Example: `zoom/username/2024/01/15` checks and creates each level
+
+**File Management Features (matching box-upload.sh):**
+- **Check Before Upload**: Search for existing files before attempting upload
+  - Query folder items to check if file with same name exists
+  - Returns existing file ID if file already exists
+  - Only uploads file if it doesn't exist
+  - Avoids 409 conflicts and duplicate uploads
+
+- **File Existence Validation**: Verify file exists before operations
+  - Check file exists by name in specific folder
+  - Validate file size matches expected size
+  - Support for file integrity checks
+
+**Implementation Approach:**
+- Add `FindFolderByName(parentID, name)` method to BoxClient
+- Add `FindFileByName(folderID, name)` method to BoxClient
+- Add `FindZoomFolderByOwner(username)` method to BoxClient
+- Modify `CreateFolder` to check existence first (optional flag)
+- Modify `UploadFile` to check existence first (optional flag)
+- Update `CreateFolderPath` to utilize folder existence checks
+- Add tests for all new functionality
 
 **Permission Management Strategy:**
 - **User-Specific Folders**: Each user's folder (e.g., `john.doe@company.com/`) is only accessible by that user
@@ -1297,31 +1340,16 @@ make build && make test && make vet               # Run all quality gates
 - **Service Account Access**: Service account maintains management access for uploads and organization
 - **Inheritance Control**: Child files and folders inherit restricted permissions from parent folders
 
-**Permission Implementation:**
-```go
-type DrivePermission struct {
-    UserEmail    string `json:"emailAddress"`
-    Role         string `json:"role"`         // "reader", "writer", "owner"
-    Type         string `json:"type"`         // "user", "group", "domain", "anyone"
-    SendNotification bool `json:"sendNotificationEmail"`
-}
-
-// Example: Grant access only to video owner
-permission := DrivePermission{
-    UserEmail: "john.doe@company.com",
-    Role:      "reader",
-    Type:      "user", 
-    SendNotification: false,
-}
-```
-
-**Permission Levels:**
-- **Video Owner**: Reader access to their own videos and metadata
-- **Service Account**: Owner access for management operations
-- **No Public Access**: Files are private by default
-- **No Organization Access**: Files are not shared at domain level
-
 **Tests:**
+- [ ] Test FindFolderByName functionality
+- [ ] Test FindFileByName functionality
+- [ ] Test FindZoomFolderByOwner with multiple zoom folders
+- [ ] Test check-before-create for folders
+- [ ] Test check-before-upload for files
+- [ ] Test CreateFolderPath with existing folders at various levels
+- [ ] Test UploadFile with existing files
+- [ ] Test 409 conflict handling returns existing resource IDs
+- [ ] Test folder ownership determination using owned_by field
 - [ ] Test folder creation with restricted permissions
 - [ ] Verify user-specific access control
 - [ ] Test permission inheritance from parent folders
@@ -1329,6 +1357,15 @@ permission := DrivePermission{
 - [ ] Verify file-level permission setting
 - [ ] Test permission error handling and validation
 - [ ] Mock different permission scenarios and edge cases
+
+**Verification Commands:**
+```bash
+go test ./internal/box -v -run TestFindFolder           # Test folder search
+go test ./internal/box -v -run TestFindFile             # Test file search
+go test ./internal/box -v -run TestFindZoomFolderOwner  # Test ownership
+go test ./internal/box -v -run TestCheckBefore          # Test check-before logic
+make build && make test && make vet                     # Run all quality gates
+```
 
 ## Phase 5: Testing & Documentation
 
@@ -1386,10 +1423,9 @@ internal/
 
 **Active User List Enhancement (active_users.txt):**
 ```
-# Format: zoom_email,box_email (or just zoom_email if same)
-john.doe@zoomaccount.com,john.doe@company.com
-jane.smith@company.com
-admin@zoomaccount.com,admin@company.com
+# Format: zoom_email,box_email,upload_complete
+john.doe@zoomaccount.com,john.doe@box.com,false
+admin@zoomaccount.com,admin@box.com,true
 # Lines starting with # are comments
 # If no comma separator, same email used for both Zoom and Box
 user@example.org
@@ -1454,7 +1490,265 @@ go test ./internal/box -v                          # Test Box permission with Bo
 make build && make test && make vet                 # Run all quality gates
 ```
 
-### Feature 5.3: Integration Testing
+### Feature 5.3: Active Users File with Upload Progress Tracking
+- [ ] Extend active users file format to support upload completion tracking
+- [ ] Implement serial processing of users from active users file
+- [ ] Add upload completion status tracking per user
+- [ ] Support resume functionality to skip already-completed users
+- [ ] Add file-based persistence of upload progress
+- [ ] Implement atomic updates to prevent corruption during interruptions
+
+**Enhanced Active User File Format (active_users.txt):**
+```
+# Format: zoom_email,box_email,upload_complete
+# zoom_email: User's Zoom account email (required)
+# box_email: User's Box account email (defaults to zoom_email if not specified)
+# upload_complete: true/false (defaults to false if not specified)
+# Lines starting with # are comments
+# Empty lines are ignored
+
+john.doe@zoomaccount.com,john.doe@company.com,false
+jane.smith@company.com,,false
+admin@zoomaccount.com,admin@company.com,true
+user@example.org,,false
+
+# Backward compatibility: lines without box_email or upload_complete still work
+legacy.user@company.com
+```
+
+**File Format Rules:**
+- **3-column format**: `zoom_email,box_email,upload_complete`
+- **2-column format**: `zoom_email,box_email` (upload_complete defaults to false)
+- **1-column format**: `zoom_email` (box_email defaults to zoom_email, upload_complete defaults to false)
+- **Comments**: Lines starting with `#` are ignored
+- **Empty lines**: Blank lines are ignored
+- **Case sensitivity**: Email matching is case-insensitive
+- **Whitespace**: Leading/trailing whitespace is trimmed from all fields
+- **Boolean values**: upload_complete accepts: true/false, yes/no, 1/0 (case-insensitive)
+
+**Serial Processing Workflow:**
+1. Load active users file with upload completion status
+2. Process users serially in file order
+3. For each user:
+   - Check if upload_complete is true → skip user
+   - Download recordings from Zoom for user
+   - Upload recordings to Box for user
+   - Mark upload_complete as true in file
+   - Update file atomically (write to temp file, then rename)
+4. Continue to next user
+5. On error or interruption:
+   - Current user remains marked as incomplete
+   - Next run will resume from incomplete users
+
+**Implementation Components:**
+
+**A. Enhanced User Entry Structure:**
+```go
+type UserEntry struct {
+    ZoomEmail      string
+    BoxEmail       string
+    UploadComplete bool
+    LineNumber     int  // Track original line number for updates
+}
+
+type ActiveUsersFile struct {
+    FilePath string
+    Entries  []UserEntry
+    mu       sync.RWMutex
+}
+```
+
+**B. File Operations:**
+- `LoadActiveUsersFile(path string) (*ActiveUsersFile, error)`
+  - Parse file with 3-column format
+  - Support backward compatibility with 1-2 column formats
+  - Validate email addresses
+  - Track line numbers for updates
+
+- `UpdateUserStatus(zoomEmail string, complete bool) error`
+  - Find user entry by zoom email (case-insensitive)
+  - Update upload_complete status
+  - Write to temporary file
+  - Atomic rename to replace original file
+  - Preserve comments and formatting
+
+- `GetIncompleteUsers() []UserEntry`
+  - Return list of users where upload_complete is false
+  - Maintain file order for serial processing
+
+- `MarkUserComplete(zoomEmail string) error`
+  - Wrapper for UpdateUserStatus(zoomEmail, true)
+  - Called after successful upload of all user recordings
+
+**C. Serial Processing Manager:**
+```go
+type UserProcessor struct {
+    usersFile      *ActiveUsersFile
+    zoomClient     zoom.Client
+    boxClient      box.BoxClient
+    downloadManager download.Manager
+    uploadManager   box.UploadManager
+}
+
+func (p *UserProcessor) ProcessAllUsers() error {
+    incompleteUsers := p.usersFile.GetIncompleteUsers()
+
+    for _, user := range incompleteUsers {
+        if err := p.processUser(user); err != nil {
+            // Log error and continue or stop based on config
+            return fmt.Errorf("failed to process user %s: %w", user.ZoomEmail, err)
+        }
+
+        // Mark user as complete after successful processing
+        if err := p.usersFile.MarkUserComplete(user.ZoomEmail); err != nil {
+            // Log warning but continue
+            log.Warn("Failed to mark user %s complete: %v", user.ZoomEmail, err)
+        }
+    }
+
+    return nil
+}
+
+func (p *UserProcessor) processUser(user UserEntry) error {
+    // 1. Download recordings from Zoom
+    recordings, err := p.downloadUserRecordings(user.ZoomEmail)
+    if err != nil {
+        return err
+    }
+
+    // 2. Upload recordings to Box
+    err = p.uploadUserRecordings(user.BoxEmail, recordings)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+```
+
+**D. Atomic File Updates:**
+```go
+func (f *ActiveUsersFile) atomicUpdate(updateFn func(*ActiveUsersFile) error) error {
+    f.mu.Lock()
+    defer f.mu.Unlock()
+
+    // Apply updates to in-memory structure
+    if err := updateFn(f); err != nil {
+        return err
+    }
+
+    // Write to temporary file
+    tempFile := f.FilePath + ".tmp"
+    if err := f.writeToFile(tempFile); err != nil {
+        return err
+    }
+
+    // Atomic rename
+    if err := os.Rename(tempFile, f.FilePath); err != nil {
+        os.Remove(tempFile) // Cleanup on failure
+        return err
+    }
+
+    return nil
+}
+```
+
+**E. Resume Functionality:**
+- On startup, load active users file
+- Filter for users where upload_complete is false
+- Process only incomplete users in file order
+- Gracefully handle interruptions:
+  - Partial user uploads are tracked in download status file
+  - User-level completion tracked in active users file
+  - Can resume at user-level or file-level granularity
+
+**CLI Integration:**
+```bash
+# Process all incomplete users from active users file
+./zoom-to-box --active-users-file ./users.txt
+
+# Process specific user (overrides active users file)
+./zoom-to-box --zoom-user john.doe@zoom.com --box-user john.doe@box.com
+
+# Show upload status for all users
+./zoom-to-box --show-status --active-users-file ./users.txt
+
+# Reset a specific user's upload status to incomplete
+./zoom-to-box --reset-user john.doe@zoom.com --active-users-file ./users.txt
+```
+
+**New CLI Flags:**
+- `--active-users-file string`: Path to active users file with upload tracking
+- `--show-status`: Display upload completion status for all users
+- `--reset-user string`: Reset specific user's upload status to incomplete
+- `--continue-on-error`: Continue processing next user even if current user fails
+
+**Error Handling:**
+- **User-level errors**: Log error, optionally continue to next user based on `--continue-on-error` flag
+- **File corruption**: Backup original file before updates, restore on corruption
+- **Partial uploads**: Track in download status file, resume on next run
+- **Network interruptions**: Current user remains incomplete, resume on restart
+
+**Tests:**
+- [ ] Test 3-column file format parsing (zoom_email,box_email,upload_complete)
+- [ ] Test comment and empty line handling
+- [ ] Test atomic file updates with concurrent access
+- [ ] Test resume functionality after interruption
+- [ ] Test skip logic for completed users
+- [ ] Test serial processing order preservation
+- [ ] Test email validation and normalization
+- [ ] Test boolean parsing for upload_complete field (true/false, yes/no, 1/0)
+- [ ] Test file corruption recovery
+- [ ] Test user status update operations
+- [ ] Test filtering incomplete users
+- [ ] Test CLI flags integration
+
+**Implementation Tasks:**
+- [ ] Create ActiveUsersFile struct with 3-column support
+- [ ] Implement file parsing with backward compatibility
+- [ ] Add atomic file update mechanism
+- [ ] Implement GetIncompleteUsers filtering
+- [ ] Create UserProcessor for serial processing
+- [ ] Add MarkUserComplete functionality
+- [ ] Implement CLI commands for status and reset
+- [ ] Add error handling and retry logic
+- [ ] Create comprehensive test suite
+- [ ] Update documentation with new file format
+
+**Backward Compatibility:**
+- Existing 1-column and 2-column files continue to work
+- Missing upload_complete column defaults to false
+- Can mix old and new formats in same file
+- Automatic migration when user is marked complete
+
+**Example Processing Flow:**
+```
+Initial active_users.txt:
+john.doe@zoom.com,john.doe@box.com,false
+jane.smith@zoom.com,jane.smith@box.com,false
+admin@zoom.com,admin@box.com,false
+
+After processing john.doe:
+john.doe@zoom.com,john.doe@box.com,true
+jane.smith@zoom.com,jane.smith@box.com,false
+admin@zoom.com,admin@box.com,false
+
+After interruption and restart:
+- Skip john.doe (already complete)
+- Resume with jane.smith
+- Continue with admin
+```
+
+**Verification Commands:**
+```bash
+go test ./internal/users -v -run TestActiveUsersFile        # Test file parsing
+go test ./internal/users -v -run TestUserProcessor          # Test serial processing
+go test ./internal/users -v -run TestAtomicUpdate          # Test atomic updates
+go test ./cmd/zoom-to-box -v -run TestActiveUsersProcessing # Test CLI integration
+make build && make test && make vet                         # Run all quality gates
+```
+
+### Feature 5.4: Integration Testing
 - [ ] End-to-end testing with real API interactions
 - [ ] Docker-based test environment
 - [ ] Test data cleanup and isolation
@@ -1524,6 +1818,30 @@ go test -tags=integration ./...
 # Build and verify
 go build . && ./zoom-to-box --help
 ```
+
+### Golden Path Verification
+
+The section below defines the flow of using the command. Each step and sub-step should be possible.
+
+- [ ] CLI reads the active user list line by line
+    - [ ] if upload_complete is false, process the user
+    - [ ] if upload_complete is true, skip processing the user
+- [ ] When processing the user, download a recording from zoom and place them in the downloads folder based on the
+recording metadata
+    - [ ] if the recording has already been downloaded locally, skip the re-download
+- [ ] Upload the file to box while creating directories also based on the zoom recording metadata
+    - [ ] make sure that the CLI is uploading to the correct zoom folder based on the box_email
+    - [ ] if the upload directories exist, continue on
+    - [ ] if the upload files exist, continue on
+    - [ ] if the upload directories do not exist create them
+    - [ ] if the upload files do not exist, upload them
+- [ ] When a recording is complete, delete the recording mp4 file.
+- [ ] Repeat the download / upload process until all recordings have been completed for the user
+- [ ] Once all recordings are finished for the user, mark the third column as true
+- [ ] Repeat for other users in the active user list
+- [ ] If there is an error processing the user
+    - [ ] make sure upload_complete is marked as false
+    - [ ] continue processing the next user in the list
 
 ### Success Criteria
 - [ ] All tests pass with >90% coverage

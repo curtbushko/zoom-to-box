@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/curtbushko/zoom-to-box/internal/config"
-	"github.com/curtbushko/zoom-to-box/internal/progress"
 )
 
 func TestRootCommand(t *testing.T) {
@@ -144,10 +142,10 @@ func TestConfigCommand(t *testing.T) {
 
 func TestGlobalFlags(t *testing.T) {
 	cmd := createRootCommand()
-	
+
 	// Test that global flags are defined
-	expectedFlags := []string{"config", "output-dir", "verbose", "dry-run", "meta-only", "limit"}
-	
+	expectedFlags := []string{"config", "output-dir", "verbose", "dry-run", "meta-only"}
+
 	for _, flagName := range expectedFlags {
 		flag := cmd.PersistentFlags().Lookup(flagName)
 		if flag == nil {
@@ -187,45 +185,20 @@ func TestFlagValidation(t *testing.T) {
 			args:        []string{"--meta-only"},
 			expectError: false,
 		},
-		{
-			name:        "valid positive limit",
-			args:        []string{"--limit", "10"},
-			expectError: false,
-		},
-		{
-			name:        "zero limit (no limit) is valid",
-			args:        []string{"--limit", "0"},
-			expectError: false,
-		},
-		{
-			name:        "negative limit should error",
-			args:        []string{"--limit", "-5"},
-			expectError: true,
-		},
-		{
-			name:        "non-numeric limit should error",
-			args:        []string{"--limit", "abc"},
-			expectError: true,
-		},
-		{
-			name:        "combine meta-only and limit",
-			args:        []string{"--meta-only", "--limit", "50"},
-			expectError: false,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := createRootCommand()
-			
+
 			// Capture output to avoid printing during tests
 			buf := &bytes.Buffer{}
 			cmd.SetOut(buf)
 			cmd.SetErr(buf)
-			
+
 			cmd.SetArgs(tt.args)
 			err := cmd.Execute()
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
 			}
@@ -269,7 +242,7 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
-func TestMetaOnlyAndLimitFlags(t *testing.T) {
+func TestMetaOnlyFlag(t *testing.T) {
 	tests := []struct {
 		name           string
 		args           []string
@@ -283,21 +256,9 @@ func TestMetaOnlyAndLimitFlags(t *testing.T) {
 			expectError:    false,
 		},
 		{
-			name:           "help shows limit flag",
-			args:           []string{"--help"},
-			expectedOutput: "--limit",
-			expectError:    false,
-		},
-		{
 			name:           "meta-only flag description in help",
 			args:           []string{"--help"},
 			expectedOutput: "download only JSON metadata files",
-			expectError:    false,
-		},
-		{
-			name:           "limit flag description in help",
-			args:           []string{"--help"},
-			expectedOutput: "limit processing to N recordings",
 			expectError:    false,
 		},
 	}
@@ -305,22 +266,22 @@ func TestMetaOnlyAndLimitFlags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := createRootCommand()
-			
+
 			// Capture output
 			buf := &bytes.Buffer{}
 			cmd.SetOut(buf)
 			cmd.SetErr(buf)
-			
+
 			cmd.SetArgs(tt.args)
 			err := cmd.Execute()
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("Expected no error but got: %v", err)
 			}
-			
+
 			output := buf.String()
 			if !strings.Contains(output, tt.expectedOutput) {
 				t.Errorf("Expected output to contain %q, got %q", tt.expectedOutput, output)
@@ -507,78 +468,7 @@ func createRootCommand() *cobra.Command {
 	return buildRootCommand()
 }
 
-// TestEstimateTotalItems tests the estimateTotalItems function
-func TestEstimateTotalItems(t *testing.T) {
-	tests := []struct {
-		name       string
-		limitFlag  int
-		expected   int
-	}{
-		{
-			name:      "no limit",
-			limitFlag: 0,
-			expected:  50, // Default estimate
-		},
-		{
-			name:      "limit higher than default",
-			limitFlag: 100,
-			expected:  50, // Default estimate
-		},
-		{
-			name:      "limit lower than default",
-			limitFlag: 25,
-			expected:  25, // Limited value
-		},
-	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{} // Empty config for testing
-			result := estimateTotalItems(cfg, tt.limitFlag)
-			if result != tt.expected {
-				t.Errorf("Expected %d, got %d", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestShowDetailedSummary tests the showDetailedSummary function
-func TestShowDetailedSummary(t *testing.T) {
-	// Create a mock command to capture output
-	cmd := &cobra.Command{}
-	buf := &bytes.Buffer{}
-	cmd.SetOut(buf)
-	
-	// Create a mock summary
-	summary := &progress.Summary{
-		TotalItems:         5,
-		CompletedDownloads: 3,
-		FailedDownloads:    1,
-		ErrorItems: []progress.ErrorItem{
-			{Item: "test.mp4", ErrorMsg: "network error"},
-		},
-		SkippedItems: []progress.SkippedItem{
-			{Item: "skipped.mp4", Reason: progress.SkipReasonAlreadyExists},
-		},
-	}
-	
-	// The function doesn't return anything, so we just test it doesn't panic
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("showDetailedSummary panicked: %v", r)
-		}
-	}()
-	
-	showDetailedSummary(cmd, summary)
-	
-	// Check that some output was generated
-	output := buf.String()
-	if !strings.Contains(output, "Detailed Summary") {
-		t.Error("Expected summary header in output")
-	}
-	
-	// The test passes if no panic occurred and output was generated
-}
 
 // TestEmailValidation tests the isValidEmail function
 func TestEmailValidation(t *testing.T) {
@@ -693,7 +583,7 @@ func TestSingleUserFlags(t *testing.T) {
 		},
 		{
 			name:        "valid zoom-user and box-user should not error during validation",
-			args:        []string{"--zoom-user", "zoom@example.com", "--box-user", "box@example.com", "--dry-run", "--limit", "1"},
+			args:        []string{"--zoom-user", "zoom@example.com", "--box-user", "box@example.com", "--dry-run"},
 			expectError: false,
 		},
 	}

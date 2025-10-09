@@ -1,4 +1,4 @@
-// Package box provides upload functionality with status tracking and permission management
+// Package box provides upload functionality with status tracking
 package box
 
 import (
@@ -6,36 +6,36 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/download"
-	"github.com/curtbushko/zoom-to-box/internal/email"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
 )
 
 // UploadManager defines the interface for Box upload operations
 type UploadManager interface {
 	// Upload operations
-	// videoOwner should be the Box email address for proper permission management
 	UploadFile(ctx context.Context, localPath, videoOwner, downloadID string) (*UploadResult, error)
 	UploadFileWithProgress(ctx context.Context, localPath, videoOwner, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error)
-	
+
 	// Resume operations
 	UploadWithResume(ctx context.Context, localPath, videoOwner, downloadID string, statusTracker download.StatusTracker) (*UploadResult, error)
-	
+
 	// Email mapping support - upload using separate Zoom and Box emails
 	UploadFileWithEmailMapping(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error)
-	
+
 	// Bulk operations
 	UploadPendingFiles(ctx context.Context, statusTracker download.StatusTracker) (*UploadSummary, error)
-	
+
 	// Validation
 	ValidateUploadedFile(ctx context.Context, fileID string, expectedSize int64) (bool, error)
-	
+
 	// Configuration
 	SetBaseFolderID(folderID string)
 	GetBaseFolderID() string
+
+	// Client access
+	GetBoxClient() BoxClient
 }
 
 // UploadProgressCallback is called during file upload to report progress
@@ -47,35 +47,32 @@ type UploadPhase string
 const (
 	PhaseCreatingFolders UploadPhase = "creating_folders"
 	PhaseUploadingFile   UploadPhase = "uploading_file"
-	PhaseSettingPermissions UploadPhase = "setting_permissions"
 	PhaseCompleted       UploadPhase = "completed"
 	PhaseFailed          UploadPhase = "failed"
 )
 
 // UploadResult represents the result of a Box upload operation
 type UploadResult struct {
-	Success        bool      `json:"success"`
-	FileID         string    `json:"file_id,omitempty"`
-	FolderID       string    `json:"folder_id,omitempty"`
-	FileName       string    `json:"file_name"`
-	FileSize       int64     `json:"file_size"`
-	UploadDate     time.Time `json:"upload_date"`
-	PermissionsSet bool      `json:"permissions_set"`
-	PermissionIDs  []string  `json:"permission_ids,omitempty"`
-	RetryCount     int       `json:"retry_count"`
-	Error          error     `json:"error,omitempty"`
-	Duration       time.Duration `json:"duration"`
+	Success    bool          `json:"success"`
+	FileID     string        `json:"file_id,omitempty"`
+	FolderID   string        `json:"folder_id,omitempty"`
+	FileName   string        `json:"file_name"`
+	FileSize   int64         `json:"file_size"`
+	UploadDate time.Time     `json:"upload_date"`
+	RetryCount int           `json:"retry_count"`
+	Error      error         `json:"error,omitempty"`
+	Duration   time.Duration `json:"duration"`
 }
 
 // UploadSummary represents a summary of bulk upload operations
 type UploadSummary struct {
-	TotalFiles     int               `json:"total_files"`
-	SuccessCount   int               `json:"success_count"`
-	FailureCount   int               `json:"failure_count"`
-	SkippedCount   int               `json:"skipped_count"`
-	Results        []*UploadResult   `json:"results"`
-	Duration       time.Duration     `json:"duration"`
-	Errors         []error           `json:"errors,omitempty"`
+	TotalFiles   int             `json:"total_files"`
+	SuccessCount int             `json:"success_count"`
+	FailureCount int             `json:"failure_count"`
+	SkippedCount int             `json:"skipped_count"`
+	Results      []*UploadResult `json:"results"`
+	Duration     time.Duration   `json:"duration"`
+	Errors       []error         `json:"errors,omitempty"`
 }
 
 // boxUploadManager implements the UploadManager interface
@@ -83,24 +80,23 @@ type boxUploadManager struct {
 	client       BoxClient
 	baseFolderID string
 	maxRetries   int
-	mutex        sync.RWMutex
 }
 
-// NewUploadManager creates a new Box upload manager  
-// The base folder is automatically set to the authenticated user's root folder
+// NewUploadManager creates a new Box upload manager
+// The base folder is initially set to root (0), but should be set to the user's
+// zoom folder ID using SetBaseFolderID() before uploading files.
+// Example: uploadManager.SetBaseFolderID(zoomFolderID)
+// This allows uploads to go to: <zoomFolder>/<year>/<month>/<day>/
 func NewUploadManager(client BoxClient) UploadManager {
 	return &boxUploadManager{
 		client:       client,
-		baseFolderID: RootFolderID, // Use authenticated user's root folder
+		baseFolderID: RootFolderID, // Will be set to user's zoom folder before uploads
 		maxRetries:   3,
 	}
 }
 
 // SetBaseFolderID sets the base folder ID for uploads
 func (um *boxUploadManager) SetBaseFolderID(folderID string) {
-	um.mutex.Lock()
-	defer um.mutex.Unlock()
-	
 	if folderID == "" {
 		folderID = RootFolderID
 	}
@@ -109,10 +105,12 @@ func (um *boxUploadManager) SetBaseFolderID(folderID string) {
 
 // GetBaseFolderID returns the current base folder ID
 func (um *boxUploadManager) GetBaseFolderID() string {
-	um.mutex.RLock()
-	defer um.mutex.RUnlock()
-	
 	return um.baseFolderID
+}
+
+// GetBoxClient returns the underlying Box client
+func (um *boxUploadManager) GetBoxClient() BoxClient {
+	return um.client
 }
 
 // UploadFile uploads a single file to Box without progress tracking
@@ -129,34 +127,21 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		UploadDate: startTime,
 	}
 
-	// Get user ID from email
-	user, err := um.client.GetUserByEmail(videoOwner)
-	if err != nil {
-		err = fmt.Errorf("failed to get user ID for email %s: %w", videoOwner, err)
-		result.Error = err
-		return result, err
-	}
-
-	// Extract username from email (videoOwner)
-	username := email.ExtractUsername(videoOwner)
-	if username == "" {
-		err := fmt.Errorf("invalid video owner email: %s", videoOwner)
-		result.Error = err
-		return result, err
-	}
-
-	// Create folder structure: <username>/<year>/<month>/<day>
-	folderPath := createDateBasedFolderPath(username, startTime)
+	// Extract folder path from the local file path
+	// The local path structure is: <baseDir>/<user>/<year>/<month>/<day>/<filename>
+	// We want to preserve the same structure in Box: <user>/<year>/<month>/<day>
+	folderPath := extractFolderPathFromLocalPath(localPath)
 
 	// Report progress - creating folders
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseCreatingFolders)
 	}
 
-	// Create folder structure as user
-	folder, err := CreateFolderPathAsUser(um.client, folderPath, um.baseFolderID, user.ID)
+	// Create folder structure using service account
+	// The service account is co-owner of the zoom folder and can create subfolders
+	folder, err := CreateFolderPath(um.client, folderPath, um.baseFolderID)
 	if err != nil {
-		err = fmt.Errorf("failed to create folder structure as user: %w", err)
+		err = fmt.Errorf("failed to create folder structure: %w", err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
@@ -179,8 +164,8 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		}
 	}
 
-	// Upload the file as user
-	file, err := um.client.UploadFileAsUser(localPath, folder.ID, result.FileName, user.ID, uploadProgressCallback)
+	// Upload the file using service account
+	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
 	if err != nil {
 		err = fmt.Errorf("failed to upload file as user: %w", err)
 		result.Error = err
@@ -194,22 +179,6 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 	result.FileSize = file.Size
 	result.Success = true
 
-	// Report progress - setting permissions
-	if progressCallback != nil {
-		progressCallback(result.FileSize, result.FileSize, PhaseSettingPermissions)
-	}
-
-	// Set permissions for the uploaded file
-	permissionIDs, err := um.setFilePermissions(ctx, file.ID, videoOwner)
-	if err != nil {
-		// Log warning but don't fail the upload
-		logging.Warn("Failed to set permissions for file %s: %v", file.ID, err)
-		result.PermissionsSet = false
-	} else {
-		result.PermissionsSet = true
-		result.PermissionIDs = permissionIDs
-	}
-
 	result.Duration = time.Since(startTime)
 
 	// Report progress - completed
@@ -218,20 +187,18 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 	}
 
 	logging.LogUserAction("box_upload_completed", videoOwner, map[string]interface{}{
-		"user_id":         user.ID,
-		"file_id":         result.FileID,
-		"file_name":       result.FileName,
-		"file_size":       result.FileSize,
-		"folder_id":       result.FolderID,
-		"permissions_set": result.PermissionsSet,
-		"duration_ms":     result.Duration.Milliseconds(),
+		"file_id":     result.FileID,
+		"file_name":   result.FileName,
+		"file_size":   result.FileSize,
+		"folder_id":   result.FolderID,
+		"duration_ms": result.Duration.Milliseconds(),
 	})
 
 	return result, nil
 }
 
 // UploadFileWithEmailMapping uploads a file using separate Zoom and Box emails
-// zoomEmail is used for logging/metadata, boxEmail is used for Box folder structure and permissions
+// zoomEmail is used for logging/metadata, boxEmail is used for Box folder structure
 func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback) (*UploadResult, error) {
 	startTime := time.Now()
 
@@ -252,34 +219,21 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		return result, err
 	}
 
-	// Get user ID from Box email
-	user, err := um.client.GetUserByEmail(boxEmail)
-	if err != nil {
-		err = fmt.Errorf("failed to get user ID for box email %s: %w", boxEmail, err)
-		result.Error = err
-		return result, err
-	}
-
-	// Extract username from Box email for folder structure
-	username := email.ExtractUsername(boxEmail)
-	if username == "" {
-		err := fmt.Errorf("invalid box email: %s", boxEmail)
-		result.Error = err
-		return result, err
-	}
-
-	// Create folder structure: <box_username>/<year>/<month>/<day>
-	folderPath := createDateBasedFolderPath(username, startTime)
+	// Extract folder path from the local file path
+	// The local path structure is: <baseDir>/<user>/<year>/<month>/<day>/<filename>
+	// We want to preserve the same structure in Box: <user>/<year>/<month>/<day>
+	folderPath := extractFolderPathFromLocalPath(localPath)
 
 	// Report progress - creating folders
 	if progressCallback != nil {
 		progressCallback(0, 0, PhaseCreatingFolders)
 	}
 
-	// Create folder structure as Box user
-	folder, err := CreateFolderPathAsUser(um.client, folderPath, um.baseFolderID, user.ID)
+	// Create folder structure using service account
+	// The service account is co-owner of the zoom folder and can create subfolders
+	folder, err := CreateFolderPath(um.client, folderPath, um.baseFolderID)
 	if err != nil {
-		err = fmt.Errorf("failed to create folder structure for box email %s as user: %w", boxEmail, err)
+		err = fmt.Errorf("failed to create folder structure for box email %s: %w", boxEmail, err)
 		result.Error = err
 		if progressCallback != nil {
 			progressCallback(0, 0, PhaseFailed)
@@ -302,8 +256,8 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		}
 	}
 
-	// Upload the file as Box user
-	file, err := um.client.UploadFileAsUser(localPath, folder.ID, result.FileName, user.ID, uploadProgressCallback)
+	// Upload the file using service account
+	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
 	if err != nil {
 		err = fmt.Errorf("failed to upload file as user: %w", err)
 		result.Error = err
@@ -317,22 +271,6 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 	result.FileSize = file.Size
 	result.Success = true
 
-	// Report progress - setting permissions
-	if progressCallback != nil {
-		progressCallback(result.FileSize, result.FileSize, PhaseSettingPermissions)
-	}
-
-	// Set permissions for the uploaded file using Box email
-	permissionIDs, err := um.setFilePermissions(ctx, file.ID, boxEmail)
-	if err != nil {
-		// Log warning but don't fail the upload
-		logging.Warn("Failed to set permissions for file %s (box email: %s): %v", file.ID, boxEmail, err)
-		result.PermissionsSet = false
-	} else {
-		result.PermissionsSet = true
-		result.PermissionIDs = permissionIDs
-	}
-
 	result.Duration = time.Since(startTime)
 
 	// Report progress - completed
@@ -342,15 +280,13 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 
 	// Log using both emails for context
 	logging.LogUserAction("box_upload_completed_with_mapping", zoomEmail, map[string]interface{}{
-		"zoom_email":      zoomEmail,
-		"box_email":       boxEmail,
-		"box_user_id":     user.ID,
-		"file_id":         result.FileID,
-		"file_name":       result.FileName,
-		"file_size":       result.FileSize,
-		"folder_id":       result.FolderID,
-		"permissions_set": result.PermissionsSet,
-		"duration_ms":     result.Duration.Milliseconds(),
+		"zoom_email":  zoomEmail,
+		"box_email":   boxEmail,
+		"file_id":     result.FileID,
+		"file_name":   result.FileName,
+		"file_size":   result.FileSize,
+		"folder_id":   result.FolderID,
+		"duration_ms": result.Duration.Milliseconds(),
 	})
 
 	return result, nil
@@ -359,18 +295,18 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 // UploadPendingFiles uploads all pending files from the status tracker
 func (um *boxUploadManager) UploadPendingFiles(ctx context.Context, statusTracker download.StatusTracker) (*UploadSummary, error) {
 	startTime := time.Now()
-	
+
 	summary := &UploadSummary{
 		Results: make([]*UploadResult, 0),
 		Errors:  make([]error, 0),
 	}
-	
+
 	// Get pending uploads
 	pendingUploads := statusTracker.GetPendingBoxUploads()
 	summary.TotalFiles = len(pendingUploads)
-	
+
 	logging.Info("Starting bulk Box upload for %d files", summary.TotalFiles)
-	
+
 	// Upload each file
 	for downloadID, entry := range pendingUploads {
 		// Check if upload should be retried
@@ -379,17 +315,17 @@ func (um *boxUploadManager) UploadPendingFiles(ctx context.Context, statusTracke
 			logging.Info("Skipping upload for %s (max retries exceeded)", downloadID)
 			continue
 		}
-		
+
 		// Mark upload started
 		statusTracker.MarkBoxUploadStarted(downloadID, um.baseFolderID)
-		
+
 		// Upload the file with resume support
 		result, err := um.UploadWithResume(ctx, entry.FilePath, entry.VideoOwner, downloadID, statusTracker)
 		if err != nil {
 			summary.FailureCount++
 			summary.Errors = append(summary.Errors, err)
 			statusTracker.MarkBoxUploadFailed(downloadID, err.Error())
-			
+
 			logging.LogUserAction("box_upload_failed", entry.VideoOwner, map[string]interface{}{
 				"download_id": downloadID,
 				"file_path":   entry.FilePath,
@@ -398,20 +334,16 @@ func (um *boxUploadManager) UploadPendingFiles(ctx context.Context, statusTracke
 		} else {
 			summary.SuccessCount++
 			statusTracker.MarkBoxUploadCompleted(downloadID, result.FileID)
-			
-			if result.PermissionsSet {
-				statusTracker.MarkBoxPermissionsSet(downloadID, result.PermissionIDs)
-			}
 		}
-		
+
 		summary.Results = append(summary.Results, result)
 	}
-	
+
 	summary.Duration = time.Since(startTime)
-	
-	logging.Info("Bulk Box upload completed: %d success, %d failed, %d skipped in %v", 
+
+	logging.Info("Bulk Box upload completed: %d success, %d failed, %d skipped in %v",
 		summary.SuccessCount, summary.FailureCount, summary.SkippedCount, summary.Duration)
-	
+
 	return summary, nil
 }
 
@@ -420,89 +352,47 @@ func (um *boxUploadManager) createFolderStructure(ctx context.Context, folderPat
 	return CreateFolderPath(um.client, folderPath, um.baseFolderID)
 }
 
-// createFolderStructureWithPermissions creates folder structure with user-specific permissions
-func (um *boxUploadManager) createFolderStructureWithPermissions(ctx context.Context, folderPath, userEmail string) (*Folder, error) {
-	// Extract username from folderPath to set user permissions on their folder
-	pathParts := strings.Split(strings.Trim(folderPath, "/"), "/")
-	if len(pathParts) == 0 {
-		return um.createFolderStructure(ctx, folderPath)
-	}
-	
-	// Create user permissions - grant user access to their own folder structure
-	userPermissions := map[string]string{
-		userEmail: RoleViewer, // User can view their recordings but not modify
-	}
-	
-	return CreateFolderPathWithPermissions(um.client, folderPath, um.baseFolderID, userPermissions)
-}
-
-// setFilePermissions sets appropriate permissions on the uploaded file
-func (um *boxUploadManager) setFilePermissions(ctx context.Context, fileID, videoOwner string) ([]string, error) {
-	logging.Info("Setting permissions for file %s, owner: %s", fileID, videoOwner)
-	
-	var permissionIDs []string
-	
-	// Create collaboration to grant access to the video owner
-	collaboration, err := um.client.CreateCollaboration(fileID, ItemTypeFile, videoOwner, RoleViewer)
-	if err != nil {
-		// Check if it's a conflict error (collaboration already exists)
-		if boxErr, ok := err.(*BoxError); ok && boxErr.Code == ErrorCodeItemNameTaken {
-			logging.Debug("Collaboration already exists for user %s on file %s", videoOwner, fileID)
-			
-			// List existing collaborations to get the ID
-			collaborations, listErr := um.client.ListCollaborations(fileID, ItemTypeFile)
-			if listErr != nil {
-				return nil, fmt.Errorf("failed to list existing collaborations: %w", listErr)
-			}
-			
-			// Find the collaboration for this user
-			for _, collab := range collaborations.Entries {
-				if collab.AccessibleBy != nil && collab.AccessibleBy.Login == videoOwner {
-					permissionIDs = append(permissionIDs, collab.ID)
-					break
-				}
-			}
-			
-			if len(permissionIDs) == 0 {
-				return nil, fmt.Errorf("could not find existing collaboration for user %s", videoOwner)
-			}
-		} else {
-			return nil, fmt.Errorf("failed to create collaboration: %w", err)
-		}
-	} else {
-		// Successfully created new collaboration
-		permissionIDs = append(permissionIDs, collaboration.ID)
-		
-		logging.LogUserAction("box_permission_granted", videoOwner, map[string]interface{}{
-			"file_id":          fileID,
-			"collaboration_id": collaboration.ID,
-			"role":            collaboration.Role,
-			"status":          collaboration.Status,
-		})
-	}
-	
-	logging.Info("Successfully set permissions for file %s, granted access to %s (permissions: %v)", 
-		fileID, videoOwner, permissionIDs)
-	
-	return permissionIDs, nil
-}
-
 // Helper functions
 
+// extractFolderPathFromLocalPath extracts the folder structure from a local file path
+// Local path structure: <baseDir>/<user>/<year>/<month>/<day>/<filename>
+// Returns: <year>/<month>/<day>
+// Note: The username is NOT included because baseFolderID is already set to the zoom folder
+func extractFolderPathFromLocalPath(localPath string) string {
+	// Get the directory part of the path (remove filename)
+	dir := filepath.Dir(localPath)
+
+	// Split the path into components
+	parts := strings.Split(filepath.ToSlash(dir), "/")
+
+	// We need to extract the last 3 components: year/month/day
+	// Start from the end and take the last 3 parts
+	if len(parts) >= 3 {
+		// Get the last 3 components: year, month, day
+		relevantParts := parts[len(parts)-3:]
+		return strings.Join(relevantParts, "/")
+	}
+
+	// If we don't have enough parts, return the entire directory path
+	// This shouldn't happen in normal operation
+	return dir
+}
 
 // createDateBasedFolderPath creates a date-based folder path for the given username and date
 // If username is empty, returns just the date-based path (for when baseFolderID is user's root)
+// Note: This function is deprecated and should not be used for new uploads.
+// Use extractFolderPathFromLocalPath instead to preserve the download directory structure.
 func createDateBasedFolderPath(username string, date time.Time) string {
 	utcDate := date.UTC()
-	datePath := fmt.Sprintf("%04d/%02d/%02d", 
-		utcDate.Year(), 
-		utcDate.Month(), 
+	datePath := fmt.Sprintf("%04d/%02d/%02d",
+		utcDate.Year(),
+		utcDate.Month(),
 		utcDate.Day())
-	
+
 	if username == "" {
 		return datePath
 	}
-	
+
 	return fmt.Sprintf("%s/%s", username, datePath)
 }
 
@@ -518,43 +408,38 @@ func (um *boxUploadManager) UploadWithResume(ctx context.Context, localPath, vid
 			if err == nil && valid {
 				// Upload already exists and is valid
 				return &UploadResult{
-					Success:        true,
-					FileID:         boxInfo.FileID,
-					FolderID:       boxInfo.FolderID,
-					FileName:       filepath.Base(localPath),
-					UploadDate:     boxInfo.UploadDate,
-					PermissionsSet: boxInfo.PermissionsSet,
-					PermissionIDs:  boxInfo.PermissionIDs,
-					Duration:       0, // No upload time since it was already done
+					Success:    true,
+					FileID:     boxInfo.FileID,
+					FolderID:   boxInfo.FolderID,
+					FileName:   filepath.Base(localPath),
+					UploadDate: boxInfo.UploadDate,
+					Duration:   0, // No upload time since it was already done
 				}, nil
 			}
-			
+
 			logging.Warn("Existing upload validation failed for %s, will re-upload", downloadID)
 		}
-		
+
 		// Check if we should retry failed uploads
 		if !download.ShouldRetryBoxUpload(download.DownloadEntry{Box: boxInfo}, um.maxRetries) {
 			return nil, fmt.Errorf("upload for %s exceeded max retries", downloadID)
 		}
 	}
-	
+
 	// Proceed with new upload
 	progressCallback := func(uploaded, total int64, phase UploadPhase) {
 		logging.Debug("Upload progress for %s: %d/%d bytes (%s)", downloadID, uploaded, total, phase)
 	}
-	
+
 	result, err := um.UploadFileWithProgress(ctx, localPath, videoOwner, downloadID, progressCallback)
-	
+
 	// Update status tracker
 	if err != nil {
 		statusTracker.MarkBoxUploadFailed(downloadID, err.Error())
 	} else {
 		statusTracker.MarkBoxUploadCompleted(downloadID, result.FileID)
-		if result.PermissionsSet {
-			statusTracker.MarkBoxPermissionsSet(downloadID, result.PermissionIDs)
-		}
 	}
-	
+
 	return result, err
 }
 
@@ -563,7 +448,7 @@ func (um *boxUploadManager) ValidateUploadedFile(ctx context.Context, fileID str
 	if fileID == "" {
 		return false, fmt.Errorf("file ID cannot be empty")
 	}
-	
+
 	// Get file information from Box
 	file, err := um.client.GetFile(fileID)
 	if err != nil {
@@ -571,13 +456,14 @@ func (um *boxUploadManager) ValidateUploadedFile(ctx context.Context, fileID str
 		logging.Debug("File validation failed for %s: %v", fileID, err)
 		return false, nil
 	}
-	
+
 	// Check file size if provided
 	if expectedSize > 0 && file.Size != expectedSize {
 		logging.Debug("File size mismatch for %s: expected %d, got %d", fileID, expectedSize, file.Size)
 		return false, nil
 	}
-	
+
 	// File exists and size matches (if checked)
 	return true, nil
 }
+

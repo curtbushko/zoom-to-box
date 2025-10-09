@@ -8,25 +8,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
 // DownloadManager defines the interface for download operations
 type DownloadManager interface {
 	Download(ctx context.Context, req DownloadRequest, progressCallback ProgressCallback) (*DownloadResult, error)
-	GetActiveDownloads() []DownloadStatus
-	CancelDownload(downloadID string) error
 }
 
 // DownloadConfig holds configuration for the download manager
 type DownloadConfig struct {
-	ConcurrentLimit int           // Maximum number of concurrent downloads
-	ChunkSize       int           // Size of each download chunk in bytes
-	RetryAttempts   int           // Number of retry attempts for failed downloads
-	RetryDelay      time.Duration // Delay between retry attempts
-	UserAgent       string        // User agent string for HTTP requests
-	Timeout         time.Duration // HTTP request timeout
+	ChunkSize     int           // Size of each download chunk in bytes
+	RetryAttempts int           // Number of retry attempts for failed downloads
+	RetryDelay    time.Duration // Delay between retry attempts
+	UserAgent     string        // User agent string for HTTP requests
+	Timeout       time.Duration // HTTP request timeout
 }
 
 // DownloadRequest represents a single download request
@@ -111,29 +107,13 @@ type ProgressCallback func(update ProgressUpdate)
 
 // downloadManagerImpl implements the DownloadManager interface
 type downloadManagerImpl struct {
-	config          DownloadConfig
-	httpClient      *http.Client
-	activeDownloads map[string]*downloadStatus
-	semaphore       chan struct{}
-	mutex           sync.RWMutex
-}
-
-// downloadStatus tracks internal download state
-type downloadStatus struct {
-	request     DownloadRequest
-	progress    ProgressUpdate
-	startTime   time.Time
-	retryCount  int
-	lastAttempt time.Time
-	cancel      context.CancelFunc
+	config     DownloadConfig
+	httpClient *http.Client
 }
 
 // NewDownloadManager creates a new download manager with the given configuration
 func NewDownloadManager(config DownloadConfig) DownloadManager {
 	// Set default values
-	if config.ConcurrentLimit <= 0 {
-		config.ConcurrentLimit = 5
-	}
 	if config.ChunkSize <= 0 {
 		config.ChunkSize = 64 * 1024 // 64KB chunks
 	}
@@ -163,86 +143,38 @@ func NewDownloadManager(config DownloadConfig) DownloadManager {
 	}
 
 	return &downloadManagerImpl{
-		config:          config,
-		httpClient:      httpClient,
-		activeDownloads: make(map[string]*downloadStatus),
-		semaphore:       make(chan struct{}, config.ConcurrentLimit),
-		mutex:           sync.RWMutex{},
+		config:     config,
+		httpClient: httpClient,
 	}
 }
 
-// Download performs a download with resume support and progress tracking
+// Download performs a download with resume support and retry logic
 func (dm *downloadManagerImpl) Download(ctx context.Context, req DownloadRequest, progressCallback ProgressCallback) (*DownloadResult, error) {
 	// Generate ID if not provided
 	if req.ID == "" {
 		req.ID = fmt.Sprintf("download_%d", time.Now().UnixNano())
 	}
 
-	// Create download context with cancellation
-	downloadCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Create initial status
-	status := &downloadStatus{
-		request:     req,
-		startTime:   time.Now(),
-		retryCount:  0,
-		lastAttempt: time.Now(),
-		cancel:      cancel,
-		progress: ProgressUpdate{
-			DownloadID:      req.ID,
-			BytesDownloaded: 0,
-			TotalBytes:      req.FileSize,
-			Speed:           0,
-			ETA:             0,
-			State:           DownloadStateQueued,
-			Metadata:        req.Metadata,
-			Timestamp:       time.Now(),
-		},
-	}
-
-	// Register download
-	dm.mutex.Lock()
-	dm.activeDownloads[req.ID] = status
-	dm.mutex.Unlock()
-
-	// Cleanup on completion
-	defer func() {
-		dm.mutex.Lock()
-		delete(dm.activeDownloads, req.ID)
-		dm.mutex.Unlock()
-	}()
-
-	// Wait for semaphore slot (concurrent limiting)
-	select {
-	case dm.semaphore <- struct{}{}:
-		defer func() { <-dm.semaphore }()
-	case <-downloadCtx.Done():
-		return nil, downloadCtx.Err()
-	}
+	startTime := time.Now()
 
 	// Execute download with retry logic
 	for attempt := 0; attempt <= dm.config.RetryAttempts; attempt++ {
-		// Update retry count
-		status.retryCount = attempt
-		status.lastAttempt = time.Now()
-
 		// Attempt download
-		result, err := dm.performDownload(downloadCtx, status, progressCallback)
+		result, err := dm.performDownload(ctx, req, startTime, progressCallback)
 		if err == nil {
 			// Success
 			result.RetryCount = attempt
-			result.Duration = time.Since(status.startTime)
+			result.Duration = time.Since(startTime)
 			return result, nil
 		}
 
 		// Check if we should retry
 		if attempt >= dm.config.RetryAttempts {
 			// Final attempt failed
-			finalResult := &DownloadResult{
+			return &DownloadResult{
 				DownloadID:      req.ID,
-				BytesDownloaded: status.progress.BytesDownloaded,
-				Duration:        time.Since(status.startTime),
+				BytesDownloaded: 0,
+				Duration:        time.Since(startTime),
 				AverageSpeed:    0,
 				Resumed:         false,
 				RetryCount:      attempt,
@@ -250,23 +182,14 @@ func (dm *downloadManagerImpl) Download(ctx context.Context, req DownloadRequest
 				Error:           err,
 				Metadata:        req.Metadata,
 				Timestamp:       time.Now(),
-			}
-
-			// Send final progress update
-			if progressCallback != nil {
-				status.progress.State = DownloadStateFailed
-				status.progress.Error = err
-				progressCallback(status.progress)
-			}
-
-			return finalResult, err
+			}, err
 		}
 
 		// Wait before retry
 		select {
 		case <-time.After(dm.config.RetryDelay):
-		case <-downloadCtx.Done():
-			return nil, downloadCtx.Err()
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 
@@ -274,8 +197,7 @@ func (dm *downloadManagerImpl) Download(ctx context.Context, req DownloadRequest
 }
 
 // performDownload performs a single download attempt with resume support
-func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *downloadStatus, progressCallback ProgressCallback) (*DownloadResult, error) {
-	req := status.request
+func (dm *downloadManagerImpl) performDownload(ctx context.Context, req DownloadRequest, startTime time.Time, progressCallback ProgressCallback) (*DownloadResult, error) {
 
 	// Check if file already exists and get current size
 	var currentSize int64 = 0
@@ -312,12 +234,18 @@ func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *down
 		httpReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", currentSize))
 	}
 
-	// Update progress: downloading
-	status.progress.State = DownloadStateDownloading
-	status.progress.BytesDownloaded = currentSize
-	status.progress.Timestamp = time.Now()
+	// Send progress update: downloading
 	if progressCallback != nil {
-		progressCallback(status.progress)
+		progressCallback(ProgressUpdate{
+			DownloadID:      req.ID,
+			BytesDownloaded: currentSize,
+			TotalBytes:      req.FileSize,
+			Speed:           0,
+			ETA:             0,
+			State:           DownloadStateDownloading,
+			Metadata:        req.Metadata,
+			Timestamp:       time.Now(),
+		})
 	}
 
 	// Make HTTP request
@@ -359,8 +287,8 @@ func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *down
 	defer file.Close()
 
 	// Download with progress tracking
-	startTime := time.Now()
-	lastProgressTime := startTime
+	downloadStartTime := time.Now()
+	lastProgressTime := downloadStartTime
 	bytesAtLastProgress := currentSize
 
 	buffer := make([]byte, dm.config.ChunkSize)
@@ -393,27 +321,29 @@ func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *down
 
 		// Update progress periodically
 		now := time.Now()
-		if now.Sub(lastProgressTime) >= 500*time.Millisecond || err == io.EOF {
+		if progressCallback != nil && (now.Sub(lastProgressTime) >= 500*time.Millisecond || err == io.EOF) {
 			// Calculate speed
 			elapsed := now.Sub(lastProgressTime).Seconds()
 			if elapsed > 0 {
 				speed := float64(totalDownloaded-bytesAtLastProgress) / elapsed
-				
+
 				// Calculate ETA
 				var eta time.Duration
 				if speed > 0 && req.FileSize > totalDownloaded {
 					eta = time.Duration(float64(req.FileSize-totalDownloaded)/speed) * time.Second
 				}
 
-				// Update progress
-				status.progress.BytesDownloaded = totalDownloaded
-				status.progress.Speed = speed
-				status.progress.ETA = eta
-				status.progress.Timestamp = now
-
-				if progressCallback != nil {
-					progressCallback(status.progress)
-				}
+				// Send progress update
+				progressCallback(ProgressUpdate{
+					DownloadID:      req.ID,
+					BytesDownloaded: totalDownloaded,
+					TotalBytes:      req.FileSize,
+					Speed:           speed,
+					ETA:             eta,
+					State:           DownloadStateDownloading,
+					Metadata:        req.Metadata,
+					Timestamp:       now,
+				})
 
 				lastProgressTime = now
 				bytesAtLastProgress = totalDownloaded
@@ -431,17 +361,21 @@ func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *down
 	}
 
 	// Calculate final statistics
-	duration := time.Since(startTime)
+	duration := time.Since(downloadStartTime)
 	averageSpeed := float64(totalDownloaded-currentSize) / duration.Seconds()
 
 	// Send final progress update
-	status.progress.State = DownloadStateCompleted
-	status.progress.BytesDownloaded = totalDownloaded
-	status.progress.Speed = 0
-	status.progress.ETA = 0
-	status.progress.Timestamp = time.Now()
 	if progressCallback != nil {
-		progressCallback(status.progress)
+		progressCallback(ProgressUpdate{
+			DownloadID:      req.ID,
+			BytesDownloaded: totalDownloaded,
+			TotalBytes:      req.FileSize,
+			Speed:           0,
+			ETA:             0,
+			State:           DownloadStateCompleted,
+			Metadata:        req.Metadata,
+			Timestamp:       time.Now(),
+		})
 	}
 
 	return &DownloadResult{
@@ -456,40 +390,4 @@ func (dm *downloadManagerImpl) performDownload(ctx context.Context, status *down
 		Metadata:        req.Metadata,
 		Timestamp:       time.Now(),
 	}, nil
-}
-
-// GetActiveDownloads returns a list of currently active downloads
-func (dm *downloadManagerImpl) GetActiveDownloads() []DownloadStatus {
-	dm.mutex.RLock()
-	defer dm.mutex.RUnlock()
-
-	var active []DownloadStatus
-	for _, status := range dm.activeDownloads {
-		active = append(active, DownloadStatus{
-			Request:     status.request,
-			Progress:    status.progress,
-			StartTime:   status.startTime,
-			RetryCount:  status.retryCount,
-			LastAttempt: status.lastAttempt,
-		})
-	}
-
-	return active
-}
-
-// CancelDownload cancels an active download
-func (dm *downloadManagerImpl) CancelDownload(downloadID string) error {
-	dm.mutex.RLock()
-	status, exists := dm.activeDownloads[downloadID]
-	dm.mutex.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("download not found: %s", downloadID)
-	}
-
-	if status.cancel != nil {
-		status.cancel()
-	}
-
-	return nil
 }

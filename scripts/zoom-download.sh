@@ -25,24 +25,24 @@ get_yaml_value() {
     local file="$1"
     local section="$2"
     local key="$3"
- 
+
     # Extract the specified section and get the specific key
-    awk -v section="$section" -v key="$key" "
-        /^" section ":/ { in_section = 1; next }
-        in_section && /^[[:space:]]*/ key ":/ { 
-            gsub(/^[[:space:]]*/ key ":[[:space:]]*/, \"\")
-            gsub(/[\"']/, \"\")
-            gsub(/[[:space:]]*#.*/, \"\")
+    awk -v section="$section" -v key="$key" '
+        $0 ~ "^" section ":" { in_section = 1; next }
+        in_section && $0 ~ "^[[:space:]]*" key ":" {
+            gsub("^[[:space:]]*" key ":[[:space:]]*", "")
+            gsub(/["'\'']/, "")
+            gsub(/[[:space:]]*#.*/, "")
             print
             exit
         }
         in_section && /^[[:alpha:]]/ && !/^[[:space:]]/ { in_section = 0 }
-    " "$file"
+    ' "$file"
 }
 
 # Read Zoom credentials from config file
 CONFIG_ACCOUNT_ID=$(get_yaml_value "$CONFIG_FILE" "zoom" "account_id")
-CONFIG_CLIENT_ID=$(get_yaml_value "$CONFIG_FILE" "zoom" "client_id") 
+CONFIG_CLIENT_ID=$(get_yaml_value "$CONFIG_FILE" "zoom" "client_id")
 CONFIG_CLIENT_SECRET=$(get_yaml_value "$CONFIG_FILE" "zoom" "client_secret")
 CONFIG_BASE_URL=$(get_yaml_value "$CONFIG_FILE" "zoom" "base_url")
 

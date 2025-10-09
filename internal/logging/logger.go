@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/config"
@@ -110,7 +109,6 @@ type loggerImpl struct {
 	jsonFormat bool
 	writers    []io.Writer
 	fileHandle *os.File
-	mutex      sync.RWMutex
 }
 
 // LogEntry represents a structured log entry
@@ -174,23 +172,20 @@ func (l *loggerImpl) log(level LogLevel, ctx context.Context, format string, arg
 	if level < l.level {
 		return // Skip if level is below threshold
 	}
-	
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
-	
+
 	entry := LogEntry{
 		Timestamp: time.Now().UTC(),
 		Level:     strings.ToUpper(level.String()),
 		Message:   fmt.Sprintf(format, args...),
 	}
-	
+
 	// Add request ID if available in context
 	if ctx != nil {
 		if requestID, ok := ctx.Value(RequestIDKey).(string); ok {
 			entry.RequestID = requestID
 		}
 	}
-	
+
 	l.writeEntry(entry)
 }
 
@@ -220,10 +215,7 @@ func (l *loggerImpl) writeStructuredEntry(level LogLevel, message string, fields
 	if level < l.level {
 		return
 	}
-	
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
-	
+
 	entry := LogEntry{
 		Timestamp: time.Now().UTC(),
 		Level:     strings.ToUpper(level.String()),
@@ -422,30 +414,21 @@ func (l *loggerImpl) LogAPIResponse(response APIResponse) {
 
 // GetLevel returns the current log level
 func (l *loggerImpl) GetLevel() LogLevel {
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
 	return l.level
 }
 
 // SetLevel sets the log level
 func (l *loggerImpl) SetLevel(level LogLevel) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	l.level = level
 }
 
 // SetOutput sets the output writer (mainly for testing)
 func (l *loggerImpl) SetOutput(w io.Writer) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	l.writers = []io.Writer{w}
 }
 
 // Close closes the logger and any open file handles
 func (l *loggerImpl) Close() error {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	
 	if l.fileHandle != nil {
 		return l.fileHandle.Close()
 	}

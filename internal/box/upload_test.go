@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,26 +15,18 @@ import (
 // Mock implementations for testing
 
 type mockBoxClient struct {
-	files                  map[string]*File
-	folders                map[string]*Folder
-	collaborations         map[string]*Collaboration
-	folderItems            map[string][]Item
-	folderCollaborations   []*Collaboration
-	deletedCollaborations  []string
-	uploadError            error
-	folderError            error
-	permissionError        error
-	collaborationExists    bool
+	files       map[string]*File
+	folders     map[string]*Folder
+	folderItems map[string][]Item
+	uploadError error
+	folderError error
 }
 
 func newMockBoxClient() *mockBoxClient {
 	return &mockBoxClient{
-		files:                 make(map[string]*File),
-		folders:               make(map[string]*Folder),
-		collaborations:        make(map[string]*Collaboration),
-		folderItems:           make(map[string][]Item),
-		folderCollaborations:  make([]*Collaboration, 0),
-		deletedCollaborations: make([]string, 0),
+		files:       make(map[string]*File),
+		folders:     make(map[string]*Folder),
+		folderItems: make(map[string][]Item),
 	}
 }
 
@@ -85,6 +76,11 @@ func (m *mockBoxClient) GetFolder(folderID string) (*Folder, error) {
 		return folder, nil
 	}
 	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound}
+}
+
+func (m *mockBoxClient) FindZoomFolder() (string, error) {
+	// Return a default zoom folder ID for tests
+	return "zoom-folder-id", nil
 }
 
 func (m *mockBoxClient) CreateFolderAsUser(name string, parentID string, userID string) (*Folder, error) {
@@ -181,67 +177,22 @@ func (m *mockBoxClient) DeleteFile(fileID string) error {
 	return nil
 }
 
-func (m *mockBoxClient) CreateCollaboration(itemID, itemType, userEmail, role string) (*Collaboration, error) {
-	if m.permissionError != nil {
-		return nil, m.permissionError
-	}
-	
-	if m.collaborationExists {
-		return nil, &BoxError{
-			StatusCode: 409,
-			Code:       ErrorCodeItemNameTaken,
-			Message:    "collaboration already exists",
-		}
-	}
-	
-	collabID := fmt.Sprintf("collab_%s_%s", itemID, userEmail)
-	collaboration := &Collaboration{
-		ID:   collabID,
-		Type: "collaboration",
-		Role: role,
-		AccessibleBy: &User{
-			Login: userEmail,
-			Type:  "user",
-		},
-		Status: StatusAccepted,
-	}
-	
-	// Store collaboration with key that includes both item and user
-	m.collaborations[itemID+"_"+userEmail] = collaboration
-	return collaboration, nil
+// FindFolderByName - Feature 4.4 implementation for mock
+func (m *mockBoxClient) FindFolderByName(parentID string, name string) (*Folder, error) {
+	// Simple implementation for tests - return nil as not used in upload tests
+	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound, Message: "not implemented in mock"}
 }
 
-func (m *mockBoxClient) ListCollaborations(itemID, itemType string) (*CollaborationsResponse, error) {
-	// Use folderCollaborations if set (for specific test scenarios)
-	if len(m.folderCollaborations) > 0 {
-		var entries []Collaboration
-		for _, collab := range m.folderCollaborations {
-			entries = append(entries, *collab)
-		}
-		return &CollaborationsResponse{
-			TotalCount: len(entries),
-			Entries:    entries,
-		}, nil
-	}
-	
-	// Otherwise, filter collaborations for this item
-	var entries []Collaboration
-	for key, collab := range m.collaborations {
-		if strings.HasPrefix(key, itemID+"_") {
-			entries = append(entries, *collab)
-		}
-	}
-	
-	return &CollaborationsResponse{
-		TotalCount: len(entries),
-		Entries:    entries,
-	}, nil
+// FindFileByName - Feature 4.4 implementation for mock
+func (m *mockBoxClient) FindFileByName(folderID string, name string) (*File, error) {
+	// Simple implementation for tests - return nil as not used in upload tests
+	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound, Message: "not implemented in mock"}
 }
 
-func (m *mockBoxClient) DeleteCollaboration(collaborationID string) error {
-	// Mark collaboration as deleted for testing
-	m.deletedCollaborations = append(m.deletedCollaborations, collaborationID)
-	return nil
+// FindZoomFolderByOwner - Feature 4.4 implementation for mock
+func (m *mockBoxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
+	// Simple implementation for tests - return nil as not used in upload tests
+	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound, Message: "not implemented in mock"}
 }
 
 type mockStatusTracker struct {
@@ -349,17 +300,6 @@ func (m *mockStatusTracker) MarkBoxUploadFailed(downloadID, errorMsg string) err
 	return nil
 }
 
-func (m *mockStatusTracker) MarkBoxPermissionsSet(downloadID string, permissionIDs []string) error {
-	entry := m.entries[downloadID]
-	if entry.Box == nil {
-		return fmt.Errorf("no box upload info")
-	}
-	entry.Box.PermissionsSet = true
-	entry.Box.PermissionIDs = permissionIDs
-	m.entries[downloadID] = entry
-	return nil
-}
-
 func (m *mockStatusTracker) GetPendingBoxUploads() map[string]download.DownloadEntry {
 	result := make(map[string]download.DownloadEntry)
 	for k, v := range m.entries {
@@ -457,8 +397,8 @@ func TestUploadFileWithProgress_Success(t *testing.T) {
 	if !result.Success {
 		t.Error("Expected upload to be successful")
 	}
-	
-	expectedPhases := []UploadPhase{PhaseCreatingFolders, PhaseUploadingFile, PhaseSettingPermissions, PhaseCompleted}
+
+	expectedPhases := []UploadPhase{PhaseCreatingFolders, PhaseUploadingFile, PhaseCompleted}
 	if len(progressCallbacks) < len(expectedPhases) {
 		t.Errorf("Expected at least %d progress callbacks, got %d", len(expectedPhases), len(progressCallbacks))
 	}
@@ -511,12 +451,10 @@ func TestUploadWithResume_ExistingValidUpload(t *testing.T) {
 		FilePath:   testFile,
 		VideoOwner: "user@example.com",
 		Box: &download.BoxUploadInfo{
-			Uploaded:       true,
-			FileID:         "existing-file-id",
-			FolderID:       "existing-folder-id",
-			UploadDate:     time.Now(),
-			PermissionsSet: true,
-			PermissionIDs:  []string{"perm-1"},
+			Uploaded:   true,
+			FileID:     "existing-file-id",
+			FolderID:   "existing-folder-id",
+			UploadDate: time.Now(),
 		},
 	}
 	
@@ -701,9 +639,47 @@ func TestExtractUsernameFromEmail(t *testing.T) {
 	}
 }
 
+func TestExtractFolderPathFromLocalPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		localPath string
+		expected  string
+	}{
+		{
+			name:      "standard path structure",
+			localPath: "/home/user/downloads/john.doe/2024/01/15/meeting-recording.mp4",
+			expected:  "john.doe/2024/01/15",
+		},
+		{
+			name:      "relative path",
+			localPath: "./downloads/user@example.com/2024/03/10/file.mp4",
+			expected:  "user@example.com/2024/03/10",
+		},
+		{
+			name:      "path with spaces",
+			localPath: "/Users/me/My Downloads/john doe/2024/06/01/video.mp4",
+			expected:  "john doe/2024/06/01",
+		},
+		{
+			name:      "absolute path with base directory",
+			localPath: "/var/data/zoom-recordings/jane.smith/2024/12/25/holiday-meeting.mp4",
+			expected:  "jane.smith/2024/12/25",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractFolderPathFromLocalPath(tt.localPath)
+			if result != tt.expected {
+				t.Errorf("extractFolderPathFromLocalPath(%q) = %s, expected %s", tt.localPath, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestCreateDateBasedFolderPath(t *testing.T) {
 	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
-	
+
 	tests := []struct {
 		name     string
 		username string
@@ -720,7 +696,7 @@ func TestCreateDateBasedFolderPath(t *testing.T) {
 			expected: "2024/01/15",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := createDateBasedFolderPath(tt.username, testTime)
@@ -798,124 +774,6 @@ func TestShouldRetryBoxUpload(t *testing.T) {
 
 // Tests for Feature 4.4 - Enhanced Folder Management with Permissions
 
-func TestCreateFolderStructureWithPermissions(t *testing.T) {
-	client := newMockBoxClient()
-	manager := NewUploadManager(client).(*boxUploadManager)
-	
-	ctx := context.Background()
-	folderPath := "john.doe/2024/01/15"
-	userEmail := "john.doe@company.com"
-	
-	folder, err := manager.createFolderStructureWithPermissions(ctx, folderPath, userEmail)
-	
-	if err != nil {
-		t.Fatalf("Expected successful folder creation, got error: %v", err)
-	}
-	
-	if folder == nil {
-		t.Fatal("Expected folder but got nil")
-	}
-	
-	// Verify that the user folder has permissions set
-	expectedUserFolderID := "folder_0_john.doe"
-	if collaboration, exists := client.collaborations[expectedUserFolderID+"_"+userEmail]; exists {
-		if collaboration.AccessibleBy == nil || collaboration.AccessibleBy.Login != userEmail {
-			t.Errorf("Expected collaboration for user %s", userEmail)
-		}
-		if collaboration.Role != RoleViewer {
-			t.Errorf("Expected viewer role, got %s", collaboration.Role)
-		}
-	}
-}
-
-func TestUploadFileWithEnhancedFolderPermissions(t *testing.T) {
-	// Create a temporary test file
-	tempDir := t.TempDir()
-	testFile := filepath.Join(tempDir, "test.mp4")
-	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	
-	client := newMockBoxClient()
-	manager := NewUploadManager(client)
-	
-	ctx := context.Background()
-	videoOwner := "john.doe@company.com"
-	downloadID := "test-download-permissions"
-	
-	result, err := manager.UploadFile(ctx, testFile, videoOwner, downloadID)
-	
-	if err != nil {
-		t.Fatalf("Expected successful upload, got error: %v", err)
-	}
-	
-	if !result.Success {
-		t.Error("Expected upload to be successful")
-	}
-	
-	// Verify that permissions were set on both the file and user folder
-	expectedUserFolderID := "folder_0_john.doe"
-	
-	// Check folder permissions
-	if collaboration, exists := client.collaborations[expectedUserFolderID+"_"+videoOwner]; exists {
-		if collaboration.AccessibleBy == nil || collaboration.AccessibleBy.Login != videoOwner {
-			t.Errorf("Expected folder collaboration for user %s", videoOwner)
-		}
-	}
-	
-	// Check file permissions
-	if collaboration, exists := client.collaborations[result.FileID+"_"+videoOwner]; exists {
-		if collaboration.AccessibleBy == nil || collaboration.AccessibleBy.Login != videoOwner {
-			t.Errorf("Expected file collaboration for user %s", videoOwner)
-		}
-		if collaboration.Role != RoleViewer {
-			t.Errorf("Expected viewer role for file, got %s", collaboration.Role)
-		}
-	}
-	
-	if !result.PermissionsSet {
-		t.Error("Expected permissions to be set")
-	}
-	
-	if len(result.PermissionIDs) == 0 {
-		t.Error("Expected permission IDs to be populated")
-	}
-}
-
-func TestFolderPermissionManagement(t *testing.T) {
-	client := newMockBoxClient()
-	
-	// Test setting permissions on a folder
-	folderID := "test-folder-123"
-	client.folders[folderID] = &Folder{
-		ID:   folderID,
-		Name: "test-folder",
-	}
-	
-	userPermissions := map[string]string{
-		"user1@company.com": RoleViewer,
-		"user2@company.com": RoleEditor,
-	}
-	
-	err := SetFolderPermissions(client, folderID, userPermissions)
-	if err != nil {
-		t.Fatalf("Expected successful permission setting, got error: %v", err)
-	}
-	
-	// Verify permissions were created
-	for userEmail, expectedRole := range userPermissions {
-		collabKey := folderID + "_" + userEmail
-		if collab, exists := client.collaborations[collabKey]; exists {
-			if collab.Role != expectedRole {
-				t.Errorf("Expected role %s for user %s, got %s", expectedRole, userEmail, collab.Role)
-			}
-		} else {
-			t.Errorf("Expected collaboration for user %s", userEmail)
-		}
-	}
-}
-
-
 // Enhanced mock client methods for folder management testing
 
 func (m *mockBoxClient) setupFolderStructure() {
@@ -931,17 +789,4 @@ func (m *mockBoxClient) setupFolderStructure() {
 			{ID: "month_folder", Type: ItemTypeFolder, Name: "01"},
 		},
 	}
-}
-
-func (m *mockBoxClient) isCollaborationDeleted(collaborationID string) bool {
-	return contains(m.deletedCollaborations, collaborationID)
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

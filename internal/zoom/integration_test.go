@@ -58,5 +58,5 @@ func TestConfigIntegration(t *testing.T) {
 		t.Errorf("Scope validation failed: %v", err)
 	}
 
-	t.Log("✅ Configuration integration test completed successfully")
+	t.Log("Configuration integration test completed successfully")
 }

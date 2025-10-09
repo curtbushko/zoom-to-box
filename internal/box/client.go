@@ -8,15 +8,14 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 type boxClient struct {
 	httpClient AuthenticatedHTTPClient
-	mutex      sync.RWMutex
 }
 
 func NewBoxClient(auth Authenticator, httpClient *http.Client) BoxClient {
@@ -70,8 +69,13 @@ func (c *boxClient) GetUserByEmail(email string) (*User, error) {
 	}
 
 	// Box API requires filtering users by login (email)
-	url := fmt.Sprintf("%s/users?filter_term=%s", BoxAPIBaseURL, email)
-	resp, err := c.httpClient.Get(context.Background(), url)
+	// URL encode the email and search for all user types
+	// The filter_term parameter matches the beginning of the login string
+	// Valid user_type values: all, managed, external
+	escapedEmail := url.QueryEscape(email)
+	apiURL := fmt.Sprintf("%s/users?filter_term=%s&user_type=all", BoxAPIBaseURL, escapedEmail)
+
+	resp, err := c.httpClient.Get(context.Background(), apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
@@ -109,15 +113,22 @@ func (c *boxClient) GetUserByEmail(email string) (*User, error) {
 		}
 	}
 
-	// Find exact match by login
+	// Find exact match by login (case-insensitive comparison)
+	emailLower := strings.ToLower(email)
 	for _, user := range response.Entries {
-		if user.Login == email {
+		if strings.ToLower(user.Login) == emailLower {
 			return user, nil
 		}
 	}
 
-	// If no exact match found, return the first result
-	return response.Entries[0], nil
+	// If no exact match found, return error instead of first result
+	// to avoid returning wrong user
+	return nil, &BoxError{
+		StatusCode: http.StatusNotFound,
+		Code:       ErrorCodeItemNotFound,
+		Message:    fmt.Sprintf("user with exact email '%s' not found (found %d partial matches)", email, len(response.Entries)),
+		Retryable:  false,
+	}
 }
 
 func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) {
@@ -142,7 +153,28 @@ func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) 
 	}
 	defer resp.Body.Close()
 
+	// Read response body for both success and error cases
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode == http.StatusConflict {
+		// Try to extract folder ID from conflict response
+		// Box API returns the conflicting item in context_info.conflicts
+		var errorResp ErrorResponse
+		if json.Unmarshal(bodyBytes, &errorResp) == nil &&
+			len(errorResp.ContextInfo.Conflicts) > 0 {
+			// Return the existing folder info
+			conflict := errorResp.ContextInfo.Conflicts[0]
+			return &Folder{
+				ID:   conflict.ID,
+				Type: conflict.Type,
+				Name: conflict.Name,
+			}, nil
+		}
+
+		// If we couldn't extract from conflict response, return error
 		return nil, &BoxError{
 			StatusCode: resp.StatusCode,
 			Code:       ErrorCodeItemNameTaken,
@@ -152,12 +184,11 @@ func (c *boxClient) CreateFolder(name string, parentID string) (*Folder, error) 
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create folder, status: %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("failed to create folder, status: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var folder Folder
-	if err := json.NewDecoder(resp.Body).Decode(&folder); err != nil {
+	if err := json.Unmarshal(bodyBytes, &folder); err != nil {
 		return nil, fmt.Errorf("failed to decode folder response: %w", err)
 	}
 
@@ -189,7 +220,28 @@ func (c *boxClient) CreateFolderAsUser(name string, parentID string, userID stri
 	}
 	defer resp.Body.Close()
 
+	// Read response body for both success and error cases
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode == http.StatusConflict {
+		// Try to extract folder ID from conflict response
+		// Box API returns the conflicting item in context_info.conflicts
+		var errorResp ErrorResponse
+		if json.Unmarshal(bodyBytes, &errorResp) == nil &&
+			len(errorResp.ContextInfo.Conflicts) > 0 {
+			// Return the existing folder info
+			conflict := errorResp.ContextInfo.Conflicts[0]
+			return &Folder{
+				ID:   conflict.ID,
+				Type: conflict.Type,
+				Name: conflict.Name,
+			}, nil
+		}
+
+		// If we couldn't extract from conflict response, return error
 		return nil, &BoxError{
 			StatusCode: resp.StatusCode,
 			Code:       ErrorCodeItemNameTaken,
@@ -199,12 +251,11 @@ func (c *boxClient) CreateFolderAsUser(name string, parentID string, userID stri
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create folder as user, status: %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("failed to create folder as user, status: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var folder Folder
-	if err := json.NewDecoder(resp.Body).Decode(&folder); err != nil {
+	if err := json.Unmarshal(bodyBytes, &folder); err != nil {
 		return nil, fmt.Errorf("failed to decode folder response: %w", err)
 	}
 
@@ -314,6 +365,151 @@ func (c *boxClient) ListFolderItemsAsUser(folderID string, userID string) (*Fold
 	}
 
 	return &items, nil
+}
+
+// FindZoomFolder finds the "zoom" folder in the root directory
+// This matches the behavior of the box-upload.sh script
+func (c *boxClient) FindZoomFolder() (string, error) {
+	url := fmt.Sprintf("%s/folders/0/items?fields=id,name,type&limit=1000", BoxAPIBaseURL)
+	resp, err := c.httpClient.Get(context.Background(), url)
+	if err != nil {
+		return "", fmt.Errorf("failed to list root folder items: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to list root folder items, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var items FolderItems
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return "", fmt.Errorf("failed to decode folder items response: %w", err)
+	}
+
+	// Search for the zoom folder
+	for _, item := range items.Entries {
+		if item.Type == ItemTypeFolder && item.Name == "zoom" {
+			return item.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("zoom folder not found in root directory")
+}
+
+// FindFolderByName searches for a folder by name within a parent folder
+// Returns the full folder information if found, or a BoxError if not found
+func (c *boxClient) FindFolderByName(parentID string, name string) (*Folder, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("folder name cannot be empty")
+	}
+
+	if parentID == "" {
+		parentID = RootFolderID
+	}
+
+	// List items in the parent folder
+	items, err := c.ListFolderItems(parentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list folder items: %w", err)
+	}
+
+	// Search for the folder by name
+	for _, item := range items.Entries {
+		if item.Type == ItemTypeFolder && item.Name == name {
+			// Get full folder information
+			return c.GetFolder(item.ID)
+		}
+	}
+
+	// Folder not found
+	return nil, &BoxError{
+		StatusCode: http.StatusNotFound,
+		Code:       ErrorCodeItemNotFound,
+		Message:    fmt.Sprintf("folder '%s' not found in parent folder", name),
+		Retryable:  false,
+	}
+}
+
+// FindFileByName searches for a file by name within a folder
+// Returns the full file information if found, or a BoxError if not found
+func (c *boxClient) FindFileByName(folderID string, name string) (*File, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("file name cannot be empty")
+	}
+
+	if folderID == "" {
+		folderID = RootFolderID
+	}
+
+	// List items in the folder
+	items, err := c.ListFolderItems(folderID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list folder items: %w", err)
+	}
+
+	// Search for the file by name
+	for _, item := range items.Entries {
+		if item.Type == ItemTypeFile && item.Name == name {
+			// Get full file information
+			return c.GetFile(item.ID)
+		}
+	}
+
+	// File not found
+	return nil, &BoxError{
+		StatusCode: http.StatusNotFound,
+		Code:       ErrorCodeItemNotFound,
+		Message:    fmt.Sprintf("file '%s' not found in folder", name),
+		Retryable:  false,
+	}
+}
+
+// FindZoomFolderByOwner finds the "zoom" folder owned by a specific user
+// Searches the root directory for zoom folders and matches by owner email
+// Returns the full folder information if found, or a BoxError if not found
+func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
+	if strings.TrimSpace(ownerEmail) == "" {
+		return nil, fmt.Errorf("owner email cannot be empty")
+	}
+
+	// List root folder items with owned_by field
+	apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by&limit=1000", BoxAPIBaseURL)
+	resp, err := c.httpClient.Get(context.Background(), apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list root folder items: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list root folder items, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var items FolderItems
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, fmt.Errorf("failed to decode folder items response: %w", err)
+	}
+
+	// Search for zoom folder owned by the specified user (case-insensitive)
+	ownerEmailLower := strings.ToLower(ownerEmail)
+	for _, item := range items.Entries {
+		if item.Type == ItemTypeFolder && item.Name == "zoom" {
+			// Check if owner matches
+			if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
+				// Get full folder information
+				return c.GetFolder(item.ID)
+			}
+		}
+	}
+
+	// Zoom folder not found for this owner
+	return nil, &BoxError{
+		StatusCode: http.StatusNotFound,
+		Code:       ErrorCodeItemNotFound,
+		Message:    fmt.Sprintf("zoom folder not found for owner '%s'", ownerEmail),
+		Retryable:  false,
+	}
 }
 
 func (c *boxClient) UploadFile(filePath string, parentFolderID string, fileName string) (*File, error) {
@@ -619,134 +815,51 @@ func (c *boxClient) DeleteFile(fileID string) error {
 	return nil
 }
 
-// Permission management methods
-
-func (c *boxClient) CreateCollaboration(itemID, itemType, userEmail, role string) (*Collaboration, error) {
-	if itemID == "" {
-		return nil, fmt.Errorf("item ID cannot be empty")
-	}
-	if userEmail == "" {
-		return nil, fmt.Errorf("user email cannot be empty")
-	}
-	if role == "" {
-		role = RoleViewer // Default to viewer role
-	}
-
-	request := CreateCollaborationRequest{
-		Item: ItemReference{
-			ID:   itemID,
-			Type: itemType,
-		},
-		AccessibleBy: UserReference{
-			Login: userEmail,
-			Type:  "user",
-		},
-		Role:        role,
-		CanViewPath: false, // Restrict view path access for privacy
-	}
-
-	url := fmt.Sprintf("%s/collaborations", BoxAPIBaseURL)
-	resp, err := c.httpClient.PostJSON(context.Background(), url, request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create collaboration: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusConflict {
-		return nil, &BoxError{
-			StatusCode: resp.StatusCode,
-			Code:       ErrorCodeItemNameTaken,
-			Message:    fmt.Sprintf("collaboration already exists for user %s on item %s", userEmail, itemID),
-			Retryable:  false,
-		}
-	}
-
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create collaboration, status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var collaboration Collaboration
-	if err := json.NewDecoder(resp.Body).Decode(&collaboration); err != nil {
-		return nil, fmt.Errorf("failed to decode collaboration response: %w", err)
-	}
-
-	return &collaboration, nil
-}
-
-func (c *boxClient) ListCollaborations(itemID, itemType string) (*CollaborationsResponse, error) {
-	if itemID == "" {
-		return nil, fmt.Errorf("item ID cannot be empty")
-	}
-	if itemType == "" {
-		itemType = ItemTypeFile // Default to file
-	}
-
-	url := fmt.Sprintf("%s/%ss/%s/collaborations", BoxAPIBaseURL, itemType, itemID)
-	resp, err := c.httpClient.Get(context.Background(), url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list collaborations: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, &BoxError{
-			StatusCode: resp.StatusCode,
-			Code:       ErrorCodeItemNotFound,
-			Message:    fmt.Sprintf("%s with ID '%s' not found", itemType, itemID),
-			Retryable:  false,
-		}
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list collaborations, status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var collaborations CollaborationsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&collaborations); err != nil {
-		return nil, fmt.Errorf("failed to decode collaborations response: %w", err)
-	}
-
-	return &collaborations, nil
-}
-
-func (c *boxClient) DeleteCollaboration(collaborationID string) error {
-	if collaborationID == "" {
-		return fmt.Errorf("collaboration ID cannot be empty")
-	}
-
-	url := fmt.Sprintf("%s/collaborations/%s", BoxAPIBaseURL, collaborationID)
-	req, err := http.NewRequestWithContext(context.Background(), "DELETE", url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create delete collaboration request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete collaboration: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return &BoxError{
-			StatusCode: resp.StatusCode,
-			Code:       ErrorCodeItemNotFound,
-			Message:    fmt.Sprintf("collaboration with ID '%s' not found", collaborationID),
-			Retryable:  false,
-		}
-	}
-
-	if resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to delete collaboration, status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
 func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Folder, error) {
-	return CreateFolderPathWithPermissions(client, folderPath, parentID, nil)
+	if folderPath == "" || folderPath == "/" {
+		if parentID == "" {
+			parentID = RootFolderID
+		}
+		return client.GetFolder(parentID)
+	}
+
+	if parentID == "" {
+		parentID = RootFolderID
+	}
+
+	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
+	currentParentID := parentID
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		items, err := client.ListFolderItems(currentParentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list items in folder %s: %w", currentParentID, err)
+		}
+
+		var found *Item
+		for _, item := range items.Entries {
+			if item.Type == ItemTypeFolder && item.Name == part {
+				found = &item
+				break
+			}
+		}
+
+		if found != nil {
+			currentParentID = found.ID
+		} else {
+			folder, err := client.CreateFolder(part, currentParentID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create folder '%s' in parent %s: %w", part, currentParentID, err)
+			}
+			currentParentID = folder.ID
+		}
+	}
+
+	return client.GetFolder(currentParentID)
 }
 
 // CreateFolderPathAsUser creates a folder path as a specific user using As-User header
@@ -801,65 +914,6 @@ func CreateFolderPathAsUser(client BoxClient, folderPath string, parentID string
 	return client.GetFolder(currentParentID)
 }
 
-func CreateFolderPathWithPermissions(client BoxClient, folderPath string, parentID string, userPermissions map[string]string) (*Folder, error) {
-	if folderPath == "" || folderPath == "/" {
-		if parentID == "" {
-			parentID = RootFolderID
-		}
-		return client.GetFolder(parentID)
-	}
-
-	if parentID == "" {
-		parentID = RootFolderID
-	}
-
-	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
-	currentParentID := parentID
-	var createdFolders []*Folder
-
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		items, err := client.ListFolderItems(currentParentID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list items in folder %s: %w", currentParentID, err)
-		}
-
-		var found *Item
-		for _, item := range items.Entries {
-			if item.Type == ItemTypeFolder && item.Name == part {
-				found = &item
-				break
-			}
-		}
-
-		if found != nil {
-			currentParentID = found.ID
-		} else {
-			folder, err := client.CreateFolder(part, currentParentID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create folder '%s' in parent %s: %w", part, currentParentID, err)
-			}
-			currentParentID = folder.ID
-			createdFolders = append(createdFolders, folder)
-		}
-	}
-
-	// Apply permissions to newly created folders if specified
-	if userPermissions != nil && len(createdFolders) > 0 {
-		for _, folder := range createdFolders {
-			if err := applyFolderPermissions(client, folder.ID, userPermissions); err != nil {
-				// Log warning but don't fail folder creation
-				fmt.Printf("Warning: failed to set permissions on folder %s: %v\n", folder.ID, err)
-			}
-		}
-	}
-
-	return client.GetFolder(currentParentID)
-}
-
 func ValidateFileName(fileName string) error {
 	if strings.TrimSpace(fileName) == "" {
 		return fmt.Errorf("file name cannot be empty")
@@ -876,33 +930,6 @@ func ValidateFileName(fileName string) error {
 		return fmt.Errorf("file name too long (max 255 characters)")
 	}
 
-	return nil
-}
-
-// Advanced folder management functions for Feature 4.4
-
-// applyFolderPermissions applies a set of user permissions to a folder
-func applyFolderPermissions(client BoxClient, folderID string, userPermissions map[string]string) error {
-	if userPermissions == nil || len(userPermissions) == 0 {
-		return nil
-	}
-
-	for userEmail, role := range userPermissions {
-		if userEmail == "" || role == "" {
-			continue
-		}
-
-		_, err := client.CreateCollaboration(folderID, ItemTypeFolder, userEmail, role)
-		if err != nil {
-			// Check if collaboration already exists
-			if boxErr, ok := err.(*BoxError); ok && boxErr.Code == ErrorCodeItemNameTaken {
-				// Collaboration exists, that's okay
-				continue
-			}
-			return fmt.Errorf("failed to create collaboration for user %s: %w", userEmail, err)
-		}
-	}
-	
 	return nil
 }
 
@@ -953,61 +980,6 @@ func FindFolderByPath(client BoxClient, folderPath string, parentID string) (*Fo
 	}
 
 	return client.GetFolder(currentParentID)
-}
-
-// EnsureUserFolderWithPermissions creates a user-specific folder structure with proper permissions
-func EnsureUserFolderWithPermissions(client BoxClient, username, userEmail string, baseFolderID string) (*Folder, error) {
-	if username == "" {
-		return nil, fmt.Errorf("username cannot be empty")
-	}
-	if userEmail == "" {
-		return nil, fmt.Errorf("user email cannot be empty")
-	}
-
-	// Create permissions map - grant the user access to their own folder
-	userPermissions := map[string]string{
-		userEmail: RoleViewer, // User can view their recordings but not modify folder structure
-	}
-
-	// Create the user folder with permissions
-	return CreateFolderPathWithPermissions(client, username, baseFolderID, userPermissions)
-}
-
-// SetFolderPermissions sets permissions on an existing folder
-func SetFolderPermissions(client BoxClient, folderID string, userPermissions map[string]string) error {
-	return applyFolderPermissions(client, folderID, userPermissions)
-}
-
-// GetFolderPermissions retrieves all collaborations (permissions) for a folder
-func GetFolderPermissions(client BoxClient, folderID string) (*CollaborationsResponse, error) {
-	return client.ListCollaborations(folderID, ItemTypeFolder)
-}
-
-// RemoveFolderPermissions removes access for specific users from a folder
-func RemoveFolderPermissions(client BoxClient, folderID string, userEmails []string) error {
-	if len(userEmails) == 0 {
-		return nil
-	}
-
-	// Get current collaborations
-	collaborations, err := client.ListCollaborations(folderID, ItemTypeFolder)
-	if err != nil {
-		return fmt.Errorf("failed to list collaborations: %w", err)
-	}
-
-	// Find and remove collaborations for specified users
-	for _, userEmail := range userEmails {
-		for _, collab := range collaborations.Entries {
-			if collab.AccessibleBy != nil && collab.AccessibleBy.Login == userEmail {
-				if err := client.DeleteCollaboration(collab.ID); err != nil {
-					return fmt.Errorf("failed to remove permission for user %s: %w", userEmail, err)
-				}
-				break
-			}
-		}
-	}
-
-	return nil
 }
 
 // ValidateFolderStructure validates that the expected folder structure exists and is accessible

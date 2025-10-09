@@ -76,10 +76,9 @@ func TestDownloadManager(t *testing.T) {
 
 			// Create download manager
 			config := DownloadConfig{
-				ConcurrentLimit: tt.concurrentLimit,
-				ChunkSize:       256,  // Small chunk size for testing
-				RetryAttempts:   3,
-				RetryDelay:      10 * time.Millisecond,
+				ChunkSize:     256, // Small chunk size for testing
+				RetryAttempts: 3,
+				RetryDelay:    10 * time.Millisecond,
 			}
 			
 			manager := NewDownloadManager(config)
@@ -208,7 +207,6 @@ func TestRangeHeaderSupport(t *testing.T) {
 
 	// Create download manager
 	config := DownloadConfig{
-		ConcurrentLimit: 1,
 		ChunkSize:       200,
 		RetryAttempts:   1,
 		RetryDelay:      time.Millisecond,
@@ -256,89 +254,49 @@ func TestRangeHeaderSupport(t *testing.T) {
 	}
 }
 
-// TestConcurrentDownloadLimiting tests that concurrent downloads are properly limited
-func TestConcurrentDownloadLimiting(t *testing.T) {
-	maxConcurrent := 2
-	activeDownloads := int32(0)
-	maxObservedConcurrent := int32(0)
-	var mutex sync.Mutex
-
+// TestSerialDownloads tests that multiple downloads work correctly (serially)
+func TestSerialDownloads(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Track concurrent downloads
-		mutex.Lock()
-		activeDownloads++
-		if activeDownloads > maxObservedConcurrent {
-			maxObservedConcurrent = activeDownloads
-		}
-		mutex.Unlock()
-
-		// Simulate some processing time
-		time.Sleep(50 * time.Millisecond)
-
 		// Send response
 		content := strings.Repeat("test", 100)
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 		w.WriteHeader(200)
 		w.Write([]byte(content))
-
-		// Decrement active downloads
-		mutex.Lock()
-		activeDownloads--
-		mutex.Unlock()
 	}))
 	defer server.Close()
 
-	// Create download manager with concurrent limit
+	// Create download manager
 	config := DownloadConfig{
-		ConcurrentLimit: maxConcurrent,
-		ChunkSize:       100,
-		RetryAttempts:   1,
-		RetryDelay:      time.Millisecond,
+		ChunkSize:     100,
+		RetryAttempts: 1,
+		RetryDelay:    time.Millisecond,
 	}
 	manager := NewDownloadManager(config)
 
 	// Create multiple download requests
 	tempDir := t.TempDir()
-	numDownloads := 5
-	var wg sync.WaitGroup
-	var downloadErrors []error
-	var errorsMutex sync.Mutex
+	numDownloads := 3
 
 	for i := 0; i < numDownloads; i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
+		req := DownloadRequest{
+			URL:         server.URL + fmt.Sprintf("/file%d.mp4", i),
+			Destination: filepath.Join(tempDir, fmt.Sprintf("test_file_%d.mp4", i)),
+			FileSize:    400, // 400 bytes
+		}
 
-			req := DownloadRequest{
-				URL:         server.URL + fmt.Sprintf("/file%d.mp4", index),
-				Destination: filepath.Join(tempDir, fmt.Sprintf("test_file_%d.mp4", index)),
-				FileSize:    400, // 400 bytes
-			}
-
-			ctx := context.Background()
-			_, err := manager.Download(ctx, req, nil)
-			if err != nil {
-				errorsMutex.Lock()
-				downloadErrors = append(downloadErrors, err)
-				errorsMutex.Unlock()
-			}
-		}(i)
+		ctx := context.Background()
+		_, err := manager.Download(ctx, req, nil)
+		if err != nil {
+			t.Errorf("Download %d failed: %v", i, err)
+		}
 	}
 
-	wg.Wait()
-
-	// Check for errors
-	if len(downloadErrors) > 0 {
-		t.Errorf("Got %d download errors: %v", len(downloadErrors), downloadErrors[0])
-	}
-
-	// Verify concurrent limit was respected
-	mutex.Lock()
-	observed := maxObservedConcurrent
-	mutex.Unlock()
-
-	if observed > int32(maxConcurrent) {
-		t.Errorf("Expected max %d concurrent downloads, observed %d", maxConcurrent, observed)
+	// Verify all files were downloaded
+	for i := 0; i < numDownloads; i++ {
+		filePath := filepath.Join(tempDir, fmt.Sprintf("test_file_%d.mp4", i))
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			t.Errorf("File %d was not downloaded", i)
+		}
 	}
 }
 
@@ -368,7 +326,6 @@ func TestProgressTracking(t *testing.T) {
 	defer server.Close()
 
 	config := DownloadConfig{
-		ConcurrentLimit: 1,
 		ChunkSize:       int(chunkSize),
 		RetryAttempts:   1,
 		RetryDelay:      time.Millisecond,
@@ -443,7 +400,6 @@ func TestNetworkInterruptionHandling(t *testing.T) {
 	defer server.Close()
 
 	config := DownloadConfig{
-		ConcurrentLimit: 1,
 		ChunkSize:       256,
 		RetryAttempts:   3,
 		RetryDelay:      50 * time.Millisecond,
@@ -550,15 +506,6 @@ func createMockDownloadServer(t *testing.T, behavior string, fileSize int64) *ht
 
 // TestDownloadManagerUncoveredFunctions tests functions with 0% coverage
 func TestDownloadManagerUncoveredFunctions(t *testing.T) {
-	config := DownloadConfig{
-		ConcurrentLimit: 2,
-		ChunkSize:       1024,
-		RetryAttempts:   3,
-		RetryDelay:      time.Millisecond,
-	}
-
-	manager := NewDownloadManager(config)
-
 	t.Run("String method", func(t *testing.T) {
 		// Test DownloadState String method
 		state := DownloadStateDownloading
@@ -575,49 +522,4 @@ func TestDownloadManagerUncoveredFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("GetActiveDownloads", func(t *testing.T) {
-		// Initially should have no active downloads
-		active := manager.GetActiveDownloads()
-		if len(active) != 0 {
-			t.Errorf("Expected 0 active downloads, got %d", len(active))
-		}
-
-		// Start a download and check active downloads
-		server := createMockDownloadServer(t, "normal", 1024)
-		defer server.Close()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		req := DownloadRequest{
-			URL:         server.URL,
-			Destination: filepath.Join(t.TempDir(), "test-active.bin"),
-		}
-
-		// Start download in goroutine
-		go func() {
-			_, _ = manager.Download(ctx, req, nil)
-		}()
-
-		// Give it time to start
-		time.Sleep(10 * time.Millisecond)
-
-		// Now check active downloads
-		active = manager.GetActiveDownloads()
-		if len(active) == 0 {
-			// Note: Due to timing, this might be 0 if download completed quickly
-			// This is acceptable for a fast test download
-		}
-	})
-
-	t.Run("CancelDownload", func(t *testing.T) {
-		// Test cancelling a non-existent download
-		err := manager.CancelDownload("http://nonexistent.com/file.mp4")
-		if err == nil {
-			t.Error("Expected error when cancelling non-existent download")
-		}
-		if !strings.Contains(err.Error(), "not found") {
-			t.Errorf("Expected 'not found' error, got: %v", err)
-		}
-	})
 }

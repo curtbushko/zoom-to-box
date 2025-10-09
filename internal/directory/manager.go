@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/email"
@@ -66,7 +65,6 @@ type directoryManagerImpl struct {
 	config            DirectoryConfig
 	activeUserManager users.ActiveUserManager
 	stats             DirectoryStats
-	mutex             sync.RWMutex
 }
 
 
@@ -79,7 +77,6 @@ func NewDirectoryManager(config DirectoryConfig, activeUserManager users.ActiveU
 			DirectoriesCreated: 0,
 			BaseDirectory:      config.BaseDirectory,
 		},
-		mutex: sync.RWMutex{},
 	}
 }
 
@@ -137,10 +134,8 @@ func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate 
 		}
 		
 		// Update stats
-		dm.mutex.Lock()
 		dm.stats.DirectoriesCreated++
 		dm.stats.LastCreated = time.Now()
-		dm.mutex.Unlock()
 	}
 	
 	return &DirectoryResult{
@@ -156,8 +151,6 @@ func (dm *directoryManagerImpl) GenerateDirectory(userEmail string, meetingDate 
 
 // GetStats returns statistics about directory operations
 func (dm *directoryManagerImpl) GetStats() DirectoryStats {
-	dm.mutex.RLock()
-	defer dm.mutex.RUnlock()
 	return dm.stats
 }
 

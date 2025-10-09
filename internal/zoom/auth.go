@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/curtbushko/zoom-to-box/internal/config"
@@ -63,7 +62,6 @@ type Authenticator interface {
 type ServerToServerAuth struct {
 	config      config.ZoomConfig
 	client      *http.Client
-	mu          sync.RWMutex
 	cachedToken *AccessToken
 }
 
@@ -79,18 +77,6 @@ func NewServerToServerAuth(cfg config.ZoomConfig) *ServerToServerAuth {
 
 // GetAccessToken obtains or refreshes an access token using Server-to-Server OAuth
 func (s *ServerToServerAuth) GetAccessToken(ctx context.Context) (*AccessToken, error) {
-	s.mu.RLock()
-	if s.cachedToken != nil && !s.cachedToken.IsExpired(5*time.Minute) {
-		token := s.cachedToken
-		s.mu.RUnlock()
-		return token, nil
-	}
-	s.mu.RUnlock()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Double-check after acquiring write lock
 	if s.cachedToken != nil && !s.cachedToken.IsExpired(5*time.Minute) {
 		return s.cachedToken, nil
 	}
