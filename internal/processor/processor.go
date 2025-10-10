@@ -118,26 +118,7 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 		logger.InfoWithContext(ctx, fmt.Sprintf("Processing user: %s (Box email: %s)", zoomEmail, boxEmail))
 	}
 
-	// Initialize per-user CSV tracker if Box is enabled
-	if p.config.BoxEnabled && p.boxUploadManager != nil {
-		username := email.ExtractUsername(boxEmail)
-		if username != "" {
-			userDir := filepath.Join(p.config.BaseDownloadDir, username)
-			userCSVTracker, err := tracking.NewUserCSVTracker(userDir, zoomEmail)
-			if err != nil {
-				if logger != nil {
-					logger.WarnWithContext(ctx, fmt.Sprintf("Failed to create user CSV tracker for %s: %v", zoomEmail, err))
-				}
-			} else {
-				p.boxUploadManager.SetUserCSVTracker(userCSVTracker)
-				if logger != nil {
-					logger.InfoWithContext(ctx, fmt.Sprintf("Initialized user CSV tracker for %s at %s/uploads.csv", zoomEmail, userDir))
-				}
-			}
-		}
-	}
-
-	// Get recordings for this user
+	// Get recordings for this user FIRST before any setup
 	params := zoom.ListRecordingsParams{
 		From:     getFromDate(),
 		To:       getToDate(),
@@ -163,6 +144,46 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 
 	if logger != nil {
 		logger.InfoWithContext(ctx, fmt.Sprintf("Found %d recordings for user %s", len(recordings), zoomEmail))
+	}
+
+	// If user has no recordings, skip them (mark as complete, don't create any directories/files)
+	if len(recordings) == 0 {
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("User %s has no recordings, skipping", zoomEmail))
+		}
+		result.Duration = time.Since(startTime)
+		return result, nil
+	}
+
+	// If Box is enabled, verify access to the zoom folder BEFORE downloading anything
+	if p.config.BoxEnabled && p.boxUploadManager != nil {
+		boxClient := p.boxUploadManager.GetBoxClient()
+		_, err := boxClient.FindZoomFolderByOwner(boxEmail)
+		if err != nil {
+			// Cannot access zoom folder - skip this user entirely
+			if logger != nil {
+				logger.WarnWithContext(ctx, fmt.Sprintf("Cannot access zoom folder for user %s (Box email: %s), skipping: %v", zoomEmail, boxEmail, err))
+			}
+			result.Duration = time.Since(startTime)
+			return result, nil
+		}
+
+		// User has recordings AND we can access their Box zoom folder - initialize CSV tracker
+		username := email.ExtractUsername(boxEmail)
+		if username != "" {
+			userDir := filepath.Join(p.config.BaseDownloadDir, username)
+			userCSVTracker, err := tracking.NewUserCSVTracker(userDir, zoomEmail)
+			if err != nil {
+				if logger != nil {
+					logger.WarnWithContext(ctx, fmt.Sprintf("Failed to create user CSV tracker for %s: %v", zoomEmail, err))
+				}
+			} else {
+				p.boxUploadManager.SetUserCSVTracker(userCSVTracker)
+				if logger != nil {
+					logger.InfoWithContext(ctx, fmt.Sprintf("Initialized user CSV tracker for %s at %s/uploads.csv", zoomEmail, userDir))
+				}
+			}
+		}
 	}
 
 	// Process each recording
