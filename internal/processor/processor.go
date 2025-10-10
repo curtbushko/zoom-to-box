@@ -317,6 +317,9 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 		return result
 	}
 
+	// Start timing the total process (download + upload)
+	processingStartTime := time.Now()
+
 	// Download the file
 	downloadReq := download.DownloadRequest{
 		ID:          fmt.Sprintf("%s-%s", recording.UUID, recordingFile.ID),
@@ -347,31 +350,15 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 		logger.InfoWithContext(ctx, fmt.Sprintf("Downloaded: %s (%d bytes)", filename, downloadResult.BytesDownloaded))
 	}
 
-	// Save metadata file alongside the video (for MP4 files only, not for other files)
-	if recordingFile.FileType == "MP4" {
-		// Create metadata filename by replacing the extension with .json
-		metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
-		metadataPath := filepath.Join(dirPath, metadataFilename)
-
-		// Check if metadata file already exists
-		if _, err := os.Stat(metadataPath); err == nil {
-			if p.config.Verbose && logger != nil {
-				logger.InfoWithContext(ctx, fmt.Sprintf("Metadata already exists: %s", metadataFilename))
-			}
-		} else {
-			// Save the recording metadata
-			if err := saveRecordingMetadata(ctx, recording, &recordingFile, metadataPath); err != nil {
-				if logger != nil {
-					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to save metadata %s: %v", metadataFilename, err))
-				}
-				// Don't fail the entire operation if metadata save fails
-			}
-		}
-	}
-
 	// Upload to Box if enabled
 	if p.config.BoxEnabled && p.boxUploadManager != nil {
-		uploadResult, uploadErr := p.uploadToBox(ctx, filePath, boxEmail, recordingFile.FileType, meetingTime)
+		// Upload the main file WITHOUT tracking yet (we'll track after we know the total time)
+		uploadResult, uploadErr := p.uploadToBoxWithoutTracking(ctx, filePath, zoomEmail, boxEmail, recordingFile.FileType, meetingTime)
+
+		// Calculate processing time AFTER the main file upload completes
+		// This captures only the download + upload time for the main recording file (excluding metadata operations)
+		processingTime := time.Since(processingStartTime)
+
 		if uploadErr != nil {
 			result.Error = uploadErr
 			// Don't delete file if upload failed
@@ -384,6 +371,25 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 			result.Uploaded = true
 		}
 
+		// Now track the upload with the accurate processing time
+		p.boxUploadManager.TrackUploadWithTime(zoomEmail, filename, recordingFile.FileSize, time.Now(), processingTime)
+
+		// Save and upload metadata file AFTER tracking the main file (for MP4 files only)
+		if recordingFile.FileType == "MP4" {
+			metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
+			metadataPath := filepath.Join(dirPath, metadataFilename)
+
+			// Save metadata file if it doesn't exist
+			if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+				if err := saveRecordingMetadata(ctx, recording, &recordingFile, metadataPath); err != nil {
+					if logger != nil {
+						logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to save metadata %s: %v", metadataFilename, err))
+					}
+					// Don't fail the entire operation if metadata save fails
+				}
+			}
+		}
+
 		// Upload metadata file to Box if this is an MP4 file
 		if recordingFile.FileType == "MP4" {
 			metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
@@ -391,7 +397,15 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 
 			// Check if metadata file exists before uploading
 			if _, err := os.Stat(metadataPath); err == nil {
-				metadataUploadResult, metadataUploadErr := p.uploadToBox(ctx, metadataPath, boxEmail, "JSON", meetingTime)
+				// Get file size for metadata
+				metadataFileInfo, _ := os.Stat(metadataPath)
+				metadataFileSize := int64(0)
+				if metadataFileInfo != nil {
+					metadataFileSize = metadataFileInfo.Size()
+				}
+
+				// Use zero processing time for metadata files since they're not part of the main recording
+				metadataUploadResult, metadataUploadErr := p.uploadToBox(ctx, metadataPath, boxEmail, "JSON", meetingTime, 0, zoomEmail, metadataFilename, metadataFileSize)
 				if metadataUploadErr != nil {
 					if logger != nil {
 						logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to upload metadata to Box: %s - %v", metadataFilename, metadataUploadErr))
@@ -440,9 +454,81 @@ type uploadResult struct {
 	Error    error
 }
 
-// uploadToBox uploads a file to Box with check-before-upload logic
+// uploadToBoxWithoutTracking uploads a file to Box without tracking (tracking done by caller)
+func (p *userProcessorImpl) uploadToBoxWithoutTracking(ctx context.Context, localPath, zoomEmail, boxEmail, fileType string, recordingTime time.Time) (*uploadResult, error) {
+	logger := logging.GetDefaultLogger()
+	result := &uploadResult{}
+
+	// Get Box client from upload manager
+	boxClient := p.boxUploadManager.GetBoxClient()
+
+	// Find the user's zoom folder in Box using their email
+	zoomFolder, err := boxClient.FindZoomFolderByOwner(boxEmail)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to find zoom folder for user %s: %w", boxEmail, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Found zoom folder for %s: %s", boxEmail, zoomFolder.ID))
+	}
+
+	// Set the upload manager's base folder to the user's zoom folder
+	p.boxUploadManager.SetBaseFolderID(zoomFolder.ID)
+
+	// Use recording time (from Zoom metadata) to create folder structure
+	folderPath := fmt.Sprintf("%04d/%02d/%02d",
+		recordingTime.Year(),
+		int(recordingTime.Month()),
+		recordingTime.Day())
+
+	// Create/get the folder structure using the user's zoom folder as parent
+	folder, err := box.CreateFolderPath(boxClient, folderPath, zoomFolder.ID)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to create Box folder structure: %w", err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	baseFileName := filepath.Base(localPath)
+
+	// Check if file already exists in Box (check-before-upload)
+	existingFile, err := boxClient.FindFileByName(folder.ID, baseFileName)
+	if err == nil && existingFile != nil {
+		// File already exists in Box - skip upload (tracking done by caller)
+		result.Skipped = true
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped Box upload (file already exists): %s", baseFileName))
+		}
+		return result, nil
+	}
+
+	// File doesn't exist - proceed with upload (without tracking - tracking done by caller)
+	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMapping(ctx, localPath, zoomEmail, boxEmail, fmt.Sprintf("upload-%s", baseFileName), nil)
+	if err != nil {
+		result.Error = fmt.Errorf("Box upload failed for %s: %w", baseFileName, err)
+		if logger != nil {
+			logger.ErrorWithContext(ctx, result.Error.Error())
+		}
+		return result, result.Error
+	}
+
+	result.Uploaded = true
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadResult.FileID))
+	}
+
+	return result, nil
+}
+
+// uploadToBox uploads a file to Box with check-before-upload logic (kept for metadata uploads)
 // Uses the recording time (from Zoom metadata) to determine the Box folder structure
-func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail, fileType string, recordingTime time.Time) (*uploadResult, error) {
+func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail, fileType string, recordingTime time.Time, processingTime time.Duration, zoomEmail, fileName string, fileSize int64) (*uploadResult, error) {
 	logger := logging.GetDefaultLogger()
 	result := &uploadResult{}
 
@@ -484,24 +570,28 @@ func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail
 		return result, result.Error
 	}
 
-	fileName := filepath.Base(localPath)
+	baseFileName := filepath.Base(localPath)
 
 	// Check if file already exists in Box (check-before-upload)
-	existingFile, err := boxClient.FindFileByName(folder.ID, fileName)
+	existingFile, err := boxClient.FindFileByName(folder.ID, baseFileName)
 	if err == nil && existingFile != nil {
-		// File already exists in Box - skip upload
+		// File already exists in Box - skip upload but still track it with processing time
 		result.Skipped = true
 		if logger != nil {
-			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped Box upload (file already exists): %s", fileName))
+			logger.InfoWithContext(ctx, fmt.Sprintf("Skipped Box upload (file already exists): %s", baseFileName))
 		}
+
+		// Track the skipped upload with processing time
+		p.boxUploadManager.TrackUploadWithTime(zoomEmail, fileName, fileSize, time.Now(), processingTime)
+
 		return result, nil
 	}
 
 	// File doesn't exist - proceed with upload
 	// The upload manager will use the baseFolderID (zoomFolder.ID) we set above
-	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMapping(ctx, localPath, boxEmail, boxEmail, fmt.Sprintf("upload-%s", fileName), nil)
+	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMappingWithTime(ctx, localPath, zoomEmail, boxEmail, fmt.Sprintf("upload-%s", baseFileName), nil, processingTime, zoomEmail, fileSize)
 	if err != nil {
-		result.Error = fmt.Errorf("Box upload failed for %s: %w", fileName, err)
+		result.Error = fmt.Errorf("Box upload failed for %s: %w", baseFileName, err)
 		if logger != nil {
 			logger.ErrorWithContext(ctx, result.Error.Error())
 		}
@@ -510,7 +600,7 @@ func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail
 
 	result.Uploaded = true
 	if logger != nil {
-		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", fileName, uploadResult.FileID))
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadResult.FileID))
 	}
 
 	return result, nil

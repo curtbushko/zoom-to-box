@@ -41,6 +41,10 @@ type UploadManager interface {
 	// CSV Tracking
 	SetGlobalCSVTracker(tracker tracking.CSVTracker)
 	SetUserCSVTracker(tracker tracking.CSVTracker)
+	TrackUploadWithTime(zoomUser, fileName string, fileSize int64, uploadDate time.Time, processingTime time.Duration)
+
+	// Upload with processing time
+	UploadFileWithEmailMappingWithTime(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback, processingTime time.Duration, trackingZoomEmail string, fileSize int64) (*UploadResult, error)
 }
 
 // UploadProgressCallback is called during file upload to report progress
@@ -212,7 +216,7 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 	})
 
 	// Track upload in CSV files if trackers are configured
-	um.trackUpload(videoOwner, result.FileName, result.FileSize, result.UploadDate)
+	um.trackUpload(videoOwner, result.FileName, result.FileSize, result.UploadDate, 0)
 
 	return result, nil
 }
@@ -309,8 +313,103 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		"duration_ms": result.Duration.Milliseconds(),
 	})
 
-	// Track upload in CSV files if trackers are configured (use zoom email for tracking)
-	um.trackUpload(zoomEmail, result.FileName, result.FileSize, result.UploadDate)
+	// Note: Tracking is NOT done here - caller is responsible for tracking with accurate processing time
+	// See processor.go line 375 for main file tracking and uploadToBox for metadata tracking
+
+	return result, nil
+}
+
+// UploadFileWithEmailMappingWithTime uploads a file using separate Zoom and Box emails with processing time tracking
+func (um *boxUploadManager) UploadFileWithEmailMappingWithTime(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback UploadProgressCallback, processingTime time.Duration, trackingZoomEmail string, fileSize int64) (*UploadResult, error) {
+	startTime := time.Now()
+
+	result := &UploadResult{
+		FileName:   filepath.Base(localPath),
+		UploadDate: startTime,
+	}
+
+	// Validate both emails
+	if zoomEmail == "" {
+		err := fmt.Errorf("zoom email cannot be empty")
+		result.Error = err
+		return result, err
+	}
+	if boxEmail == "" {
+		err := fmt.Errorf("box email cannot be empty")
+		result.Error = err
+		return result, err
+	}
+
+	// Extract folder path from the local file path
+	folderPath := extractFolderPathFromLocalPath(localPath)
+
+	// Report progress - creating folders
+	if progressCallback != nil {
+		progressCallback(0, 0, PhaseCreatingFolders)
+	}
+
+	// Create folder structure using service account
+	folder, err := CreateFolderPath(um.client, folderPath, um.baseFolderID)
+	if err != nil {
+		err = fmt.Errorf("failed to create folder structure for box email %s: %w", boxEmail, err)
+		result.Error = err
+		if progressCallback != nil {
+			progressCallback(0, 0, PhaseFailed)
+		}
+		return result, err
+	}
+
+	result.FolderID = folder.ID
+
+	// Report progress - uploading file
+	if progressCallback != nil {
+		progressCallback(0, 0, PhaseUploadingFile)
+	}
+
+	// Create upload progress callback
+	var uploadProgressCallback ProgressCallback
+	if progressCallback != nil {
+		uploadProgressCallback = func(uploaded, total int64) {
+			progressCallback(uploaded, total, PhaseUploadingFile)
+		}
+	}
+
+	// Upload the file using service account
+	file, err := um.client.UploadFileWithProgress(localPath, folder.ID, result.FileName, uploadProgressCallback)
+	if err != nil {
+		err = fmt.Errorf("failed to upload file as user: %w", err)
+		result.Error = err
+		if progressCallback != nil {
+			progressCallback(0, 0, PhaseFailed)
+		}
+		return result, err
+	}
+
+	result.FileID = file.ID
+	result.FileSize = file.Size
+	result.Success = true
+
+	result.Duration = time.Since(startTime)
+
+	// Report progress - completed
+	if progressCallback != nil {
+		progressCallback(result.FileSize, result.FileSize, PhaseCompleted)
+	}
+
+	// Log using both emails for context
+	logging.LogUserAction("box_upload_completed_with_mapping_and_time", trackingZoomEmail, map[string]interface{}{
+		"zoom_email":             zoomEmail,
+		"box_email":              boxEmail,
+		"file_id":                result.FileID,
+		"file_name":              result.FileName,
+		"file_size":              result.FileSize,
+		"folder_id":              result.FolderID,
+		"duration_ms":            result.Duration.Milliseconds(),
+		"processing_time_seconds": int64(processingTime.Seconds()),
+	})
+
+	// Track upload with processing time
+	um.trackUpload(trackingZoomEmail, result.FileName, fileSize, result.UploadDate, processingTime)
 
 	return result, nil
 }
@@ -491,12 +590,13 @@ func (um *boxUploadManager) ValidateUploadedFile(ctx context.Context, fileID str
 }
 
 // trackUpload records an upload to both global and user CSV trackers if they are configured
-func (um *boxUploadManager) trackUpload(zoomUser, fileName string, fileSize int64, uploadDate time.Time) {
+func (um *boxUploadManager) trackUpload(zoomUser, fileName string, fileSize int64, uploadDate time.Time, processingTime time.Duration) {
 	entry := tracking.UploadEntry{
-		ZoomUser:      zoomUser,
-		FileName:      fileName,
-		RecordingSize: fileSize,
-		UploadDate:    uploadDate,
+		ZoomUser:       zoomUser,
+		FileName:       fileName,
+		RecordingSize:  fileSize,
+		UploadDate:     uploadDate,
+		ProcessingTime: processingTime,
 	}
 
 	// Track in global CSV if configured
@@ -512,5 +612,10 @@ func (um *boxUploadManager) trackUpload(zoomUser, fileName string, fileSize int6
 			logging.Warn("Failed to track upload in user CSV: %v", err)
 		}
 	}
+}
+
+// TrackUploadWithTime is a public method to track uploads with processing time
+func (um *boxUploadManager) TrackUploadWithTime(zoomUser, fileName string, fileSize int64, uploadDate time.Time, processingTime time.Duration) {
+	um.trackUpload(zoomUser, fileName, fileSize, uploadDate, processingTime)
 }
 

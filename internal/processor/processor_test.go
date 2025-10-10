@@ -271,6 +271,15 @@ func (m *mockUploadManager) SetUserCSVTracker(tracker tracking.CSVTracker) {
 	// Mock implementation - no-op
 }
 
+func (m *mockUploadManager) TrackUploadWithTime(zoomUser, fileName string, fileSize int64, uploadDate time.Time, processingTime time.Duration) {
+	// Mock implementation - no-op
+}
+
+func (m *mockUploadManager) UploadFileWithEmailMappingWithTime(ctx context.Context, localPath, zoomEmail, boxEmail, downloadID string, progressCallback box.UploadProgressCallback, processingTime time.Duration, trackingZoomEmail string, fileSize int64) (*box.UploadResult, error) {
+	// Delegate to the regular upload method
+	return m.UploadFileWithEmailMapping(ctx, localPath, zoomEmail, boxEmail, downloadID, progressCallback)
+}
+
 // Test: User processor processes single user successfully
 func TestUserProcessor_ProcessSingleUser(t *testing.T) {
 	tmpDir := t.TempDir()

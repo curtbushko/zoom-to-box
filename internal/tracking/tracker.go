@@ -11,10 +11,11 @@ import (
 
 // UploadEntry represents a single upload record
 type UploadEntry struct {
-	ZoomUser      string
-	FileName      string
-	RecordingSize int64
-	UploadDate    time.Time
+	ZoomUser       string
+	FileName       string
+	RecordingSize  int64
+	UploadDate     time.Time
+	ProcessingTime time.Duration
 }
 
 // CSVTracker defines the interface for tracking uploads to CSV files
@@ -119,7 +120,7 @@ func (t *GlobalCSVTracker) writeHeader() error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	header := []string{"user", "file_name", "recording_size", "upload_date"}
+	header := []string{"user", "file_name", "recording_size", "upload_date", "processing_time_seconds"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
@@ -138,7 +139,7 @@ func (t *UserCSVTracker) writeHeader() error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	header := []string{"user", "file_name", "recording_size", "upload_date"}
+	header := []string{"user", "file_name", "recording_size", "upload_date", "processing_time_seconds"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
@@ -162,6 +163,7 @@ func (t *GlobalCSVTracker) appendEntry(entry UploadEntry) error {
 		entry.FileName,
 		fmt.Sprintf("%d", entry.RecordingSize),
 		entry.UploadDate.Format(time.RFC3339),
+		fmt.Sprintf("%d", int64(entry.ProcessingTime.Seconds())),
 	}
 
 	if err := writer.Write(record); err != nil {
@@ -187,6 +189,7 @@ func (t *UserCSVTracker) appendEntry(entry UploadEntry) error {
 		entry.FileName,
 		fmt.Sprintf("%d", entry.RecordingSize),
 		entry.UploadDate.Format(time.RFC3339),
+		fmt.Sprintf("%d", int64(entry.ProcessingTime.Seconds())),
 	}
 
 	if err := writer.Write(record); err != nil {

@@ -26,7 +26,7 @@ func TestNewGlobalCSVTracker(t *testing.T) {
 		t.Fatalf("Failed to read CSV file: %v", err)
 	}
 
-	expected := "user,file_name,recording_size,upload_date\n"
+	expected := "user,file_name,recording_size,upload_date,processing_time_seconds\n"
 	if string(data) != expected {
 		t.Errorf("Expected header %q, got %q", expected, string(data))
 	}
@@ -44,10 +44,11 @@ func TestGlobalCSVTracker_TrackUpload(t *testing.T) {
 	// Track an upload
 	uploadTime := time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC)
 	entry := UploadEntry{
-		ZoomUser:      "john.doe@company.com",
-		FileName:      "team-standup-meeting-1500.mp4",
-		RecordingSize: 1048576,
-		UploadDate:    uploadTime,
+		ZoomUser:         "john.doe@company.com",
+		FileName:         "team-standup-meeting-1500.mp4",
+		RecordingSize:    1048576,
+		UploadDate:       uploadTime,
+		ProcessingTime:   45 * time.Second,
 	}
 
 	err = tracker.TrackUpload(entry)
@@ -61,7 +62,7 @@ func TestGlobalCSVTracker_TrackUpload(t *testing.T) {
 		t.Fatalf("Failed to read CSV file: %v", err)
 	}
 
-	expectedContent := "user,file_name,recording_size,upload_date\njohn.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z\n"
+	expectedContent := "user,file_name,recording_size,upload_date,processing_time_seconds\njohn.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z,45\n"
 	if string(data) != expectedContent {
 		t.Errorf("Expected content:\n%s\nGot:\n%s", expectedContent, string(data))
 	}
@@ -79,16 +80,18 @@ func TestGlobalCSVTracker_MultipleUploads(t *testing.T) {
 	// Track multiple uploads
 	uploads := []UploadEntry{
 		{
-			ZoomUser:      "john.doe@company.com",
-			FileName:      "meeting-1.mp4",
-			RecordingSize: 1048576,
-			UploadDate:    time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC),
+			ZoomUser:       "john.doe@company.com",
+			FileName:       "meeting-1.mp4",
+			RecordingSize:  1048576,
+			UploadDate:     time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC),
+			ProcessingTime: 30 * time.Second,
 		},
 		{
-			ZoomUser:      "jane.smith@company.com",
-			FileName:      "meeting-2.mp4",
-			RecordingSize: 2097152,
-			UploadDate:    time.Date(2024, 1, 15, 14, 20, 0, 0, time.UTC),
+			ZoomUser:       "jane.smith@company.com",
+			FileName:       "meeting-2.mp4",
+			RecordingSize:  2097152,
+			UploadDate:     time.Date(2024, 1, 15, 14, 20, 0, 0, time.UTC),
+			ProcessingTime: 60 * time.Second,
 		},
 	}
 
@@ -106,9 +109,9 @@ func TestGlobalCSVTracker_MultipleUploads(t *testing.T) {
 
 	lines := string(data)
 	expectedLines := []string{
-		"user,file_name,recording_size,upload_date",
-		"john.doe@company.com,meeting-1.mp4,1048576,2024-01-15T15:00:00Z",
-		"jane.smith@company.com,meeting-2.mp4,2097152,2024-01-15T14:20:00Z",
+		"user,file_name,recording_size,upload_date,processing_time_seconds",
+		"john.doe@company.com,meeting-1.mp4,1048576,2024-01-15T15:00:00Z,30",
+		"jane.smith@company.com,meeting-2.mp4,2097152,2024-01-15T14:20:00Z,60",
 	}
 
 	for _, expected := range expectedLines {
@@ -142,7 +145,7 @@ func TestNewUserCSVTracker(t *testing.T) {
 		t.Fatalf("Failed to read CSV file: %v", err)
 	}
 
-	expected := "user,file_name,recording_size,upload_date\n"
+	expected := "user,file_name,recording_size,upload_date,processing_time_seconds\n"
 	if string(data) != expected {
 		t.Errorf("Expected header %q, got %q", expected, string(data))
 	}
@@ -164,10 +167,11 @@ func TestUserCSVTracker_TrackUpload(t *testing.T) {
 	// Track an upload
 	uploadTime := time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC)
 	entry := UploadEntry{
-		ZoomUser:      "john.doe@company.com",
-		FileName:      "team-standup-meeting-1500.mp4",
-		RecordingSize: 1048576,
-		UploadDate:    uploadTime,
+		ZoomUser:       "john.doe@company.com",
+		FileName:       "team-standup-meeting-1500.mp4",
+		RecordingSize:  1048576,
+		UploadDate:     uploadTime,
+		ProcessingTime: 52 * time.Second,
 	}
 
 	err = tracker.TrackUpload(entry)
@@ -182,7 +186,7 @@ func TestUserCSVTracker_TrackUpload(t *testing.T) {
 		t.Fatalf("Failed to read CSV file: %v", err)
 	}
 
-	expectedContent := "user,file_name,recording_size,upload_date\njohn.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z\n"
+	expectedContent := "user,file_name,recording_size,upload_date,processing_time_seconds\njohn.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z,52\n"
 	if string(data) != expectedContent {
 		t.Errorf("Expected content:\n%s\nGot:\n%s", expectedContent, string(data))
 	}
@@ -204,10 +208,11 @@ func TestCSVTracker_ConcurrentWrites(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(idx int) {
 			entry := UploadEntry{
-				ZoomUser:      "john.doe@company.com",
-				FileName:      "meeting-" + string(rune('0'+idx)) + ".mp4",
-				RecordingSize: int64(1048576 * (idx + 1)),
-				UploadDate:    uploadTime,
+				ZoomUser:       "john.doe@company.com",
+				FileName:       "meeting-" + string(rune('0'+idx)) + ".mp4",
+				RecordingSize:  int64(1048576 * (idx + 1)),
+				UploadDate:     uploadTime,
+				ProcessingTime: time.Duration(idx+1) * time.Second,
 			}
 			if err := tracker.TrackUpload(entry); err != nil {
 				t.Errorf("Concurrent TrackUpload failed: %v", err)
@@ -245,10 +250,11 @@ func TestCSVTracker_ExistingFile(t *testing.T) {
 	}
 
 	entry1 := UploadEntry{
-		ZoomUser:      "john.doe@company.com",
-		FileName:      "meeting-1.mp4",
-		RecordingSize: 1048576,
-		UploadDate:    time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC),
+		ZoomUser:       "john.doe@company.com",
+		FileName:       "meeting-1.mp4",
+		RecordingSize:  1048576,
+		UploadDate:     time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC),
+		ProcessingTime: 25 * time.Second,
 	}
 
 	if err := tracker1.TrackUpload(entry1); err != nil {
@@ -262,10 +268,11 @@ func TestCSVTracker_ExistingFile(t *testing.T) {
 	}
 
 	entry2 := UploadEntry{
-		ZoomUser:      "jane.smith@company.com",
-		FileName:      "meeting-2.mp4",
-		RecordingSize: 2097152,
-		UploadDate:    time.Date(2024, 1, 15, 14, 20, 0, 0, time.UTC),
+		ZoomUser:       "jane.smith@company.com",
+		FileName:       "meeting-2.mp4",
+		RecordingSize:  2097152,
+		UploadDate:     time.Date(2024, 1, 15, 14, 20, 0, 0, time.UTC),
+		ProcessingTime: 38 * time.Second,
 	}
 
 	if err := tracker2.TrackUpload(entry2); err != nil {
