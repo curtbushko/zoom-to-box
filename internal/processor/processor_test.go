@@ -93,6 +93,7 @@ type mockBoxClient struct {
 	folders             map[string]*box.Folder
 	uploadError         error
 	findFileError       error
+	findZoomFolderError error
 	existingFiles       map[string]bool
 	deletedFiles        []string
 }
@@ -185,6 +186,9 @@ func (m *mockBoxClient) FindFolderByName(parentID string, name string) (*box.Fol
 	return nil, &box.BoxError{StatusCode: 404, Code: box.ErrorCodeItemNotFound}
 }
 func (m *mockBoxClient) FindZoomFolderByOwner(ownerEmail string) (*box.Folder, error) {
+	if m.findZoomFolderError != nil {
+		return nil, m.findZoomFolderError
+	}
 	return &box.Folder{
 		ID:   "zoom-folder-" + ownerEmail,
 		Name: "zoom",
@@ -457,4 +461,224 @@ func TestUserProcessor_ContinueOnError(t *testing.T) {
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Errorf("Expected file to remain after failed upload, but it was deleted")
 	}
+}
+
+// Test: User processor marks user inactive when Box folder access fails
+func TestUserProcessor_BoxFolderAccessFails(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create mock clients
+	zoomClient := newMockZoomClient()
+	downloadManager := newMockDownloadManager()
+	boxClient := newMockBoxClient()
+
+	// Set Box zoom folder access error
+	boxClient.findZoomFolderError = fmt.Errorf("access denied to zoom folder")
+
+	// Add test recording
+	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	zoomClient.recordings["john.doe@example.com"] = []*zoom.Recording{
+		{
+			UUID:      "test-uuid-123",
+			Topic:     "Test Meeting",
+			StartTime: testTime,
+			RecordingFiles: []zoom.RecordingFile{
+				{
+					ID:          "file-123",
+					FileType:    "MP4",
+					DownloadURL: "https://zoom.us/download/test.mp4",
+					FileSize:    1024,
+				},
+			},
+		},
+	}
+
+	// Create user processor with Box enabled
+	config := ProcessorConfig{
+		BaseDownloadDir:   tmpDir,
+		BoxEnabled:        true,
+		DeleteAfterUpload: false,
+		ContinueOnError:   true,
+	}
+
+	userManager, _ := users.NewActiveUserManager(users.ActiveUserConfig{
+		FilePath:      "",
+		CaseSensitive: false,
+		WatchFile:     false,
+	})
+
+	dirManager := directory.NewDirectoryManager(directory.DirectoryConfig{
+		BaseDirectory: tmpDir,
+		CreateDirs:    true,
+	}, userManager)
+
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+	boxUploadManager := newMockUploadManager(boxClient)
+
+	processor := NewUserProcessor(
+		zoomClient,
+		downloadManager,
+		dirManager,
+		filenameSanitizer,
+		boxUploadManager,
+		config,
+	)
+
+	// Process user - should fail with Box access error
+	ctx := context.Background()
+	result, err := processor.ProcessUser(ctx, "john.doe@example.com", "john.doe@example.com")
+
+	// Should complete without returning error (continue-on-error)
+	if err != nil {
+		t.Errorf("Expected no error with ContinueOnError=true, got: %v", err)
+	}
+
+	// Should have error count indicating Box access failure
+	if result.ErrorCount != 1 {
+		t.Errorf("Expected 1 error count for Box access failure, got %d", result.ErrorCount)
+	}
+
+	// Should have 0 downloads (user not processed due to Box access failure)
+	if result.DownloadedCount != 0 {
+		t.Errorf("Expected 0 downloads when Box access fails, got %d", result.DownloadedCount)
+	}
+
+	// Should have 0 uploads
+	if result.UploadedCount != 0 {
+		t.Errorf("Expected 0 uploads when Box access fails, got %d", result.UploadedCount)
+	}
+
+	// Verify error message contains Box access information
+	if len(result.Errors) != 1 {
+		t.Fatalf("Expected 1 error in result.Errors, got %d", len(result.Errors))
+	}
+
+	errorMsg := result.Errors[0].Error()
+	if !contains(errorMsg, "cannot access zoom folder") {
+		t.Errorf("Expected error message to mention zoom folder access, got: %s", errorMsg)
+	}
+}
+
+// Test: User processor marks user inactive in ProcessAllUsers when Box access fails
+func TestUserProcessor_ProcessAllUsers_BoxFolderAccessFails(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create active users file
+	activeUsersPath := filepath.Join(tmpDir, "active_users.txt")
+	activeUsersContent := "john.doe@example.com,john.doe@example.com,false\n"
+	if err := os.WriteFile(activeUsersPath, []byte(activeUsersContent), 0644); err != nil {
+		t.Fatalf("Failed to create active users file: %v", err)
+	}
+
+	// Load active users file
+	usersFile, err := users.LoadActiveUsersFile(activeUsersPath)
+	if err != nil {
+		t.Fatalf("Failed to load active users file: %v", err)
+	}
+
+	// Create mock clients
+	zoomClient := newMockZoomClient()
+	downloadManager := newMockDownloadManager()
+	boxClient := newMockBoxClient()
+
+	// Set Box zoom folder access error
+	boxClient.findZoomFolderError = fmt.Errorf("access denied to zoom folder")
+
+	// Add test recording
+	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	zoomClient.recordings["john.doe@example.com"] = []*zoom.Recording{
+		{
+			UUID:      "test-uuid-123",
+			Topic:     "Test Meeting",
+			StartTime: testTime,
+			RecordingFiles: []zoom.RecordingFile{
+				{
+					ID:          "file-123",
+					FileType:    "MP4",
+					DownloadURL: "https://zoom.us/download/test.mp4",
+					FileSize:    1024,
+				},
+			},
+		},
+	}
+
+	// Create user processor
+	config := ProcessorConfig{
+		BaseDownloadDir:   tmpDir,
+		BoxEnabled:        true,
+		DeleteAfterUpload: false,
+		ContinueOnError:   true,
+	}
+
+	userManager, _ := users.NewActiveUserManager(users.ActiveUserConfig{
+		FilePath:      "",
+		CaseSensitive: false,
+		WatchFile:     false,
+	})
+
+	dirManager := directory.NewDirectoryManager(directory.DirectoryConfig{
+		BaseDirectory: tmpDir,
+		CreateDirs:    true,
+	}, userManager)
+
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+	boxUploadManager := newMockUploadManager(boxClient)
+
+	processor := NewUserProcessor(
+		zoomClient,
+		downloadManager,
+		dirManager,
+		filenameSanitizer,
+		boxUploadManager,
+		config,
+	)
+
+	// Process all users
+	ctx := context.Background()
+	summary, err := processor.ProcessAllUsers(ctx, usersFile)
+
+	// Should complete without error (continue-on-error)
+	if err != nil {
+		t.Errorf("Expected no error with ContinueOnError=true, got: %v", err)
+	}
+
+	// Should have 1 failed user
+	if summary.FailedUsers != 1 {
+		t.Errorf("Expected 1 failed user, got %d", summary.FailedUsers)
+	}
+
+	// Should have 0 processed users (user failed, not completed)
+	if summary.ProcessedUsers != 0 {
+		t.Errorf("Expected 0 processed users (user had errors), got %d", summary.ProcessedUsers)
+	}
+
+	// Verify user is marked as incomplete (upload_complete = false) in the file
+	updatedUsersFile, err := users.LoadActiveUsersFile(activeUsersPath)
+	if err != nil {
+		t.Fatalf("Failed to reload active users file: %v", err)
+	}
+
+	incompleteUsers := updatedUsersFile.GetIncompleteUsers()
+	if len(incompleteUsers) != 1 {
+		t.Errorf("Expected 1 incomplete user after Box access failure, got %d", len(incompleteUsers))
+	}
+
+	if len(incompleteUsers) > 0 && incompleteUsers[0].UploadComplete {
+		t.Errorf("Expected user to be marked as incomplete (upload_complete=false), but got upload_complete=true")
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

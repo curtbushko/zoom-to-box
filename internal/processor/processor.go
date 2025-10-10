@@ -160,11 +160,19 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 		boxClient := p.boxUploadManager.GetBoxClient()
 		_, err := boxClient.FindZoomFolderByOwner(boxEmail)
 		if err != nil {
-			// Cannot access zoom folder - skip this user entirely
-			if logger != nil {
-				logger.WarnWithContext(ctx, fmt.Sprintf("Cannot access zoom folder for user %s (Box email: %s), skipping: %v", zoomEmail, boxEmail, err))
-			}
+			// Cannot access zoom folder - mark this user as failed so they remain in active_users with upload_complete=false
+			boxErr := fmt.Errorf("cannot access zoom folder for user %s (Box email: %s): %w", zoomEmail, boxEmail, err)
+			result.Errors = append(result.Errors, boxErr)
+			result.ErrorCount++
 			result.Duration = time.Since(startTime)
+
+			if logger != nil {
+				logger.WarnWithContext(ctx, boxErr.Error())
+			}
+
+			if !p.config.ContinueOnError {
+				return result, boxErr
+			}
 			return result, nil
 		}
 
