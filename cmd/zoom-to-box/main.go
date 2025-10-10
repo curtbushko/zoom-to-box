@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
 	"github.com/curtbushko/zoom-to-box/internal/processor"
+	"github.com/curtbushko/zoom-to-box/internal/tracking"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
 )
@@ -514,8 +516,16 @@ func performDownloads(ctx context.Context, cfg *config.Config, singleUserConfig 
 		boxClient := box.NewBoxClient(auth, httpClient)
 		uploadManager = box.NewUploadManager(boxClient)
 
+		// Initialize CSV trackers for upload tracking
+		globalCSVPath := filepath.Join(cfg.Download.OutputDir, "all-uploads.csv")
+		globalCSVTracker, err := tracking.NewGlobalCSVTracker(globalCSVPath)
+		if err != nil {
+			return stats, fmt.Errorf("failed to create global CSV tracker: %w", err)
+		}
+		uploadManager.SetGlobalCSVTracker(globalCSVTracker)
+
 		if logger != nil {
-			logger.InfoWithContext(ctx, "Box upload integration enabled")
+			logger.InfoWithContext(ctx, "Box upload integration enabled with CSV tracking")
 		}
 		fmt.Printf("Box upload integration enabled\n")
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/curtbushko/zoom-to-box/internal/email"
 	"github.com/curtbushko/zoom-to-box/internal/filename"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
+	"github.com/curtbushko/zoom-to-box/internal/tracking"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
 )
@@ -117,6 +118,25 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 		logger.InfoWithContext(ctx, fmt.Sprintf("Processing user: %s (Box email: %s)", zoomEmail, boxEmail))
 	}
 
+	// Initialize per-user CSV tracker if Box is enabled
+	if p.config.BoxEnabled && p.boxUploadManager != nil {
+		username := email.ExtractUsername(boxEmail)
+		if username != "" {
+			userDir := filepath.Join(p.config.BaseDownloadDir, username)
+			userCSVTracker, err := tracking.NewUserCSVTracker(userDir, zoomEmail)
+			if err != nil {
+				if logger != nil {
+					logger.WarnWithContext(ctx, fmt.Sprintf("Failed to create user CSV tracker for %s: %v", zoomEmail, err))
+				}
+			} else {
+				p.boxUploadManager.SetUserCSVTracker(userCSVTracker)
+				if logger != nil {
+					logger.InfoWithContext(ctx, fmt.Sprintf("Initialized user CSV tracker for %s at %s/uploads.csv", zoomEmail, userDir))
+				}
+			}
+		}
+	}
+
 	// Get recordings for this user
 	params := zoom.ListRecordingsParams{
 		From:     getFromDate(),
@@ -209,6 +229,16 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 	if logger != nil {
 		logger.InfoWithContext(ctx, fmt.Sprintf("Completed processing user %s: %d downloaded, %d uploaded, %d skipped, %d deleted, %d errors in %v",
 			zoomEmail, result.DownloadedCount, result.UploadedCount, result.SkippedCount, result.DeletedCount, result.ErrorCount, result.Duration))
+	}
+
+	// Upload the user's uploads.csv to their Box zoom folder if Box is enabled and uploads occurred
+	if p.config.BoxEnabled && p.boxUploadManager != nil && result.UploadedCount > 0 {
+		if err := p.uploadUserCSVToBox(ctx, zoomEmail, boxEmail); err != nil {
+			if logger != nil {
+				logger.WarnWithContext(ctx, fmt.Sprintf("Failed to upload uploads.csv to Box for user %s: %v", zoomEmail, err))
+			}
+			// Don't fail the entire user processing if CSV upload fails
+		}
 	}
 
 	return result, nil
@@ -565,6 +595,58 @@ func (p *userProcessorImpl) ProcessAllUsers(ctx context.Context, usersFile *user
 	}
 
 	return summary, nil
+}
+
+// uploadUserCSVToBox uploads the user's uploads.csv file to their Box zoom folder
+func (p *userProcessorImpl) uploadUserCSVToBox(ctx context.Context, zoomEmail, boxEmail string) error {
+	logger := logging.GetDefaultLogger()
+
+	// Extract username from Box email
+	username := email.ExtractUsername(boxEmail)
+	if username == "" {
+		return fmt.Errorf("invalid box email format: %s", boxEmail)
+	}
+
+	// Construct path to the uploads.csv file
+	userDir := filepath.Join(p.config.BaseDownloadDir, username)
+	csvFilePath := filepath.Join(userDir, "uploads.csv")
+
+	// Check if the CSV file exists
+	if _, err := os.Stat(csvFilePath); os.IsNotExist(err) {
+		// CSV file doesn't exist, nothing to upload
+		if logger != nil {
+			logger.InfoWithContext(ctx, fmt.Sprintf("No uploads.csv found for user %s, skipping upload to Box", zoomEmail))
+		}
+		return nil
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploading uploads.csv to Box for user %s", zoomEmail))
+	}
+
+	// Get the base folder ID (should be the user's zoom folder)
+	baseFolderID := p.boxUploadManager.GetBaseFolderID()
+	if baseFolderID == "" || baseFolderID == box.RootFolderID {
+		return fmt.Errorf("base folder ID not set for Box uploads")
+	}
+
+	// Upload the CSV file to the zoom folder root (not in date subfolders)
+	boxClient := p.boxUploadManager.GetBoxClient()
+	if boxClient == nil {
+		return fmt.Errorf("box client not available")
+	}
+
+	// Upload the file
+	file, err := boxClient.UploadFileWithProgress(csvFilePath, baseFolderID, "uploads.csv", nil)
+	if err != nil {
+		return fmt.Errorf("failed to upload uploads.csv: %w", err)
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Successfully uploaded uploads.csv to Box for user %s (file ID: %s)", zoomEmail, file.ID))
+	}
+
+	return nil
 }
 
 // Helper functions

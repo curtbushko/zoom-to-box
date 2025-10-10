@@ -10,6 +10,7 @@ import (
 
 	"github.com/curtbushko/zoom-to-box/internal/download"
 	"github.com/curtbushko/zoom-to-box/internal/logging"
+	"github.com/curtbushko/zoom-to-box/internal/tracking"
 )
 
 // UploadManager defines the interface for Box upload operations
@@ -36,6 +37,10 @@ type UploadManager interface {
 
 	// Client access
 	GetBoxClient() BoxClient
+
+	// CSV Tracking
+	SetGlobalCSVTracker(tracker tracking.CSVTracker)
+	SetUserCSVTracker(tracker tracking.CSVTracker)
 }
 
 // UploadProgressCallback is called during file upload to report progress
@@ -77,9 +82,11 @@ type UploadSummary struct {
 
 // boxUploadManager implements the UploadManager interface
 type boxUploadManager struct {
-	client       BoxClient
-	baseFolderID string
-	maxRetries   int
+	client            BoxClient
+	baseFolderID      string
+	maxRetries        int
+	globalCSVTracker  tracking.CSVTracker
+	userCSVTracker    tracking.CSVTracker
 }
 
 // NewUploadManager creates a new Box upload manager
@@ -111,6 +118,16 @@ func (um *boxUploadManager) GetBaseFolderID() string {
 // GetBoxClient returns the underlying Box client
 func (um *boxUploadManager) GetBoxClient() BoxClient {
 	return um.client
+}
+
+// SetGlobalCSVTracker sets the global CSV tracker for tracking all uploads
+func (um *boxUploadManager) SetGlobalCSVTracker(tracker tracking.CSVTracker) {
+	um.globalCSVTracker = tracker
+}
+
+// SetUserCSVTracker sets the user-specific CSV tracker for tracking user uploads
+func (um *boxUploadManager) SetUserCSVTracker(tracker tracking.CSVTracker) {
+	um.userCSVTracker = tracker
 }
 
 // UploadFile uploads a single file to Box without progress tracking
@@ -193,6 +210,9 @@ func (um *boxUploadManager) UploadFileWithProgress(ctx context.Context, localPat
 		"folder_id":   result.FolderID,
 		"duration_ms": result.Duration.Milliseconds(),
 	})
+
+	// Track upload in CSV files if trackers are configured
+	um.trackUpload(videoOwner, result.FileName, result.FileSize, result.UploadDate)
 
 	return result, nil
 }
@@ -288,6 +308,9 @@ func (um *boxUploadManager) UploadFileWithEmailMapping(ctx context.Context, loca
 		"folder_id":   result.FolderID,
 		"duration_ms": result.Duration.Milliseconds(),
 	})
+
+	// Track upload in CSV files if trackers are configured (use zoom email for tracking)
+	um.trackUpload(zoomEmail, result.FileName, result.FileSize, result.UploadDate)
 
 	return result, nil
 }
@@ -465,5 +488,29 @@ func (um *boxUploadManager) ValidateUploadedFile(ctx context.Context, fileID str
 
 	// File exists and size matches (if checked)
 	return true, nil
+}
+
+// trackUpload records an upload to both global and user CSV trackers if they are configured
+func (um *boxUploadManager) trackUpload(zoomUser, fileName string, fileSize int64, uploadDate time.Time) {
+	entry := tracking.UploadEntry{
+		ZoomUser:      zoomUser,
+		FileName:      fileName,
+		RecordingSize: fileSize,
+		UploadDate:    uploadDate,
+	}
+
+	// Track in global CSV if configured
+	if um.globalCSVTracker != nil {
+		if err := um.globalCSVTracker.TrackUpload(entry); err != nil {
+			logging.Warn("Failed to track upload in global CSV: %v", err)
+		}
+	}
+
+	// Track in user CSV if configured
+	if um.userCSVTracker != nil {
+		if err := um.userCSVTracker.TrackUpload(entry); err != nil {
+			logging.Warn("Failed to track upload in user CSV: %v", err)
+		}
+	}
 }
 

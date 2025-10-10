@@ -1284,7 +1284,76 @@ go build ./cmd/zoom-to-box                        # Build complete application
 make build && make test && make vet               # Run all quality gates
 ```
 
-### Feature 4.4: Box Folder and File Management Enhancements
+### Feature 4.4: Upload Tracking with CSV Reports ✅ COMPLETED
+- [x] Implement global all-uploads.csv tracking file for all user uploads
+- [x] Implement per-user uploads.csv tracking files in each user's directory
+- [x] Track zoom user, file name, and recording size for each upload
+- [x] Create CSV writer with thread-safe concurrent access
+- [x] Support CSV file creation and append operations
+- [x] Generate global CSV in base download directory
+- [x] Generate per-user CSV in user's root directory (e.g., `john.doe/uploads.csv`)
+- [x] Update CSV files atomically to prevent corruption
+- [x] Add CSV tracking to upload workflow
+
+**Global CSV File Structure (all-uploads.csv):**
+```csv
+user,file_name,recording_size,upload_date
+john.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z
+jane.smith@company.com,weekly-review-call-1420.mp4,2097152,2024-01-15T14:20:00Z
+```
+
+**Per-User CSV File Structure (john.doe/uploads.csv):**
+```csv
+user,file_name,recording_size,upload_date
+john.doe@company.com,team-standup-meeting-1500.mp4,1048576,2024-01-15T15:00:00Z
+john.doe@company.com,project-meeting-0930.mp4,3145728,2024-01-16T09:30:00Z
+```
+
+**Implementation Components:**
+- **CSVTracker Interface**: Define interface for CSV tracking operations
+- **Global CSV Tracker**: Manages all-uploads.csv in base directory
+- **User CSV Tracker**: Manages per-user uploads.csv files
+- **Atomic Writes**: Thread-safe append operations with file locking
+- **Integration**: Hook into upload workflow to record successful uploads
+
+**Tests:**
+- [x] Test global CSV file creation and append operations
+- [x] Test per-user CSV file creation in user directories
+- [x] Test thread-safe concurrent CSV writes
+- [x] Test CSV file format and field validation
+- [x] Test atomic file updates to prevent corruption
+- [x] Test integration with upload manager
+- [x] Test CSV generation for multiple users and files
+- [x] Test resume functionality with existing CSV files
+
+**Implementation Summary:**
+- ✅ Created `/internal/tracking/tracker.go` with complete CSVTracker implementation
+- ✅ Created comprehensive test suite in `/internal/tracking/tracker_test.go`
+- ✅ Interface-driven design with CSVTracker interface for testability
+- ✅ GlobalCSVTracker manages all-uploads.csv in base directory
+- ✅ UserCSVTracker manages per-user uploads.csv files
+- ✅ Thread-safe concurrent access with mutex protection
+- ✅ Automatic CSV header creation on file initialization
+- ✅ Append-only operations to prevent data loss
+- ✅ Support for existing file resume (doesn't overwrite)
+- ✅ All quality gates passed: Tests, build, vet
+
+**Key Features:**
+- **Interface Design**: CSVTracker interface enables easy integration and mocking
+- **Thread Safety**: Mutex-protected writes for concurrent upload tracking
+- **Automatic Headers**: CSV files created with proper headers on initialization
+- **Resume Support**: Opens existing files in append mode, preserves existing data
+- **Error Handling**: Comprehensive error messages with context
+- **RFC3339 Timestamps**: ISO 8601 format for upload dates
+- **Flexible Paths**: Supports custom paths for both global and user trackers
+
+**Verification Commands:**
+```bash
+go test ./internal/tracking -v                    # Run CSV tracking tests
+make build && make test && make vet               # Run all quality gates
+```
+
+### Feature 4.5: Box Folder and File Management Enhancements
 - [ ] Implement check-before-create for folders to avoid unnecessary API calls
 - [ ] Implement check-before-upload for files to avoid duplicate uploads
 - [ ] Add FindFolderByName functionality to search for existing folders

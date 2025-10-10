@@ -13,6 +13,7 @@ import (
 	"github.com/curtbushko/zoom-to-box/internal/directory"
 	"github.com/curtbushko/zoom-to-box/internal/download"
 	"github.com/curtbushko/zoom-to-box/internal/filename"
+	"github.com/curtbushko/zoom-to-box/internal/tracking"
 	"github.com/curtbushko/zoom-to-box/internal/users"
 	"github.com/curtbushko/zoom-to-box/internal/zoom"
 )
@@ -260,6 +261,14 @@ func (m *mockUploadManager) GetBaseFolderID() string {
 
 func (m *mockUploadManager) GetBoxClient() box.BoxClient {
 	return m.boxClient
+}
+
+func (m *mockUploadManager) SetGlobalCSVTracker(tracker tracking.CSVTracker) {
+	// Mock implementation - no-op
+}
+
+func (m *mockUploadManager) SetUserCSVTracker(tracker tracking.CSVTracker) {
+	// Mock implementation - no-op
 }
 
 // Test: User processor processes single user successfully
