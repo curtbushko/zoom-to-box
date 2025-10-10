@@ -3,6 +3,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -316,6 +317,28 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 		logger.InfoWithContext(ctx, fmt.Sprintf("Downloaded: %s (%d bytes)", filename, downloadResult.BytesDownloaded))
 	}
 
+	// Save metadata file alongside the video (for MP4 files only, not for other files)
+	if recordingFile.FileType == "MP4" {
+		// Create metadata filename by replacing the extension with .json
+		metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
+		metadataPath := filepath.Join(dirPath, metadataFilename)
+
+		// Check if metadata file already exists
+		if _, err := os.Stat(metadataPath); err == nil {
+			if p.config.Verbose && logger != nil {
+				logger.InfoWithContext(ctx, fmt.Sprintf("Metadata already exists: %s", metadataFilename))
+			}
+		} else {
+			// Save the recording metadata
+			if err := saveRecordingMetadata(ctx, recording, &recordingFile, metadataPath); err != nil {
+				if logger != nil {
+					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to save metadata %s: %v", metadataFilename, err))
+				}
+				// Don't fail the entire operation if metadata save fails
+			}
+		}
+	}
+
 	// Upload to Box if enabled
 	if p.config.BoxEnabled && p.boxUploadManager != nil {
 		uploadResult, uploadErr := p.uploadToBox(ctx, filePath, boxEmail, recordingFile.FileType, meetingTime)
@@ -331,8 +354,39 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 			result.Uploaded = true
 		}
 
-		// Delete local file after successful upload (if configured)
-		if p.config.DeleteAfterUpload && uploadResult.Uploaded {
+		// Upload metadata file to Box if this is an MP4 file
+		if recordingFile.FileType == "MP4" {
+			metadataFilename := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
+			metadataPath := filepath.Join(dirPath, metadataFilename)
+
+			// Check if metadata file exists before uploading
+			if _, err := os.Stat(metadataPath); err == nil {
+				metadataUploadResult, metadataUploadErr := p.uploadToBox(ctx, metadataPath, boxEmail, "JSON", meetingTime)
+				if metadataUploadErr != nil {
+					if logger != nil {
+						logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to upload metadata to Box: %s - %v", metadataFilename, metadataUploadErr))
+					}
+					// Don't fail the entire operation if metadata upload fails
+				} else if metadataUploadResult.Uploaded || metadataUploadResult.Skipped {
+					if metadataUploadResult.Uploaded && logger != nil {
+						logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded metadata to Box: %s", metadataFilename))
+					}
+					// Delete metadata file after successful upload or if already in Box (if configured)
+					if p.config.DeleteAfterUpload {
+						if err := os.Remove(metadataPath); err != nil {
+							if logger != nil {
+								logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to delete metadata after upload: %s - %v", metadataPath, err))
+							}
+						} else if logger != nil {
+							logger.InfoWithContext(ctx, fmt.Sprintf("Deleted local metadata after upload: %s", metadataFilename))
+						}
+					}
+				}
+			}
+		}
+
+		// Delete local file after successful upload or if it was skipped (already in Box)
+		if p.config.DeleteAfterUpload && (uploadResult.Uploaded || uploadResult.Skipped) {
 			if err := os.Remove(filePath); err != nil {
 				if logger != nil {
 					logger.ErrorWithContext(ctx, fmt.Sprintf("Failed to delete file after upload: %s - %v", filePath, err))
@@ -514,6 +568,57 @@ func (p *userProcessorImpl) ProcessAllUsers(ctx context.Context, usersFile *user
 }
 
 // Helper functions
+
+// saveRecordingMetadata saves the recording metadata as a JSON file
+// This includes both the meeting/recording details and the specific file information
+func saveRecordingMetadata(ctx context.Context, recording *zoom.Recording, recordingFile *zoom.RecordingFile, metadataPath string) error {
+	logger := logging.GetDefaultLogger()
+
+	// Create metadata structure that combines recording and file details
+	metadata := map[string]interface{}{
+		"meeting": map[string]interface{}{
+			"uuid":       recording.UUID,
+			"id":         recording.ID,
+			"account_id": recording.AccountID,
+			"host_id":    recording.HostID,
+			"topic":      recording.Topic,
+			"type":       recording.Type,
+			"start_time": recording.StartTime,
+			"duration":   recording.Duration,
+			"total_size": recording.TotalSize,
+		},
+		"recording_file": map[string]interface{}{
+			"id":              recordingFile.ID,
+			"meeting_id":      recordingFile.MeetingID,
+			"recording_start": recordingFile.RecordingStart,
+			"recording_end":   recordingFile.RecordingEnd,
+			"file_type":       recordingFile.FileType,
+			"file_extension":  recordingFile.FileExtension,
+			"file_size":       recordingFile.FileSize,
+			"download_url":    recordingFile.DownloadURL,
+			"play_url":        recordingFile.PlayURL,
+			"status":          recordingFile.Status,
+			"recording_type":  recordingFile.RecordingType,
+		},
+	}
+
+	// Marshal to JSON with pretty printing
+	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal recording metadata: %w", err)
+	}
+
+	// Write the JSON data to file
+	if err := os.WriteFile(metadataPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write metadata file %s: %w", metadataPath, err)
+	}
+
+	if logger != nil {
+		logger.InfoWithContext(ctx, fmt.Sprintf("Saved metadata: %s", filepath.Base(metadataPath)))
+	}
+
+	return nil
+}
 
 // getFromDate returns the start date for fetching recordings (30 days ago)
 func getFromDate() *time.Time {

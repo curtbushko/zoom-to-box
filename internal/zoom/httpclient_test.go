@@ -470,9 +470,8 @@ func TestTimeoutHandling(t *testing.T) {
 func TestHTTPClientConfiguration(t *testing.T) {
 	// Use download config from configuration system
 	downloadConfig := config.DownloadConfig{
-		TimeoutSeconds:  10,
-		RetryAttempts:   3,
-		ConcurrentLimit: 5,
+		TimeoutSeconds: 10,
+		RetryAttempts:  3,
 	}
 
 	clientConfig := HTTPClientConfigFromDownloadConfig(downloadConfig)
