@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -360,15 +359,14 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 	// Start timing the total process (download + upload)
 	processingStartTime := time.Now()
 
-	// Prepare download URL with access token if available
+	// Prepare download URL and headers with access token if available
 	downloadURL := recordingFile.DownloadURL
+	headers := make(map[string]string)
+
+	// Add download access token as Authorization Bearer header (not query parameter)
+	// This prevents file size limitations that occur when using query parameter tokens
 	if recording.DownloadAccessToken != "" {
-		// Add download access token as query parameter
-		separator := "?"
-		if strings.Contains(downloadURL, "?") {
-			separator = "&"
-		}
-		downloadURL = fmt.Sprintf("%s%saccess_token=%s", downloadURL, separator, url.QueryEscape(recording.DownloadAccessToken))
+		headers["Authorization"] = fmt.Sprintf("Bearer %s", recording.DownloadAccessToken)
 	}
 
 	// Download the file
@@ -377,7 +375,7 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 		URL:         downloadURL,
 		Destination: filePath,
 		FileSize:    recordingFile.FileSize,
-		Headers:     make(map[string]string),
+		Headers:     headers,
 		Metadata: map[string]interface{}{
 			"user_email":    zoomEmail,
 			"meeting_id":    recording.UUID,

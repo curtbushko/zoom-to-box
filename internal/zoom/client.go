@@ -165,8 +165,8 @@ func (c *ZoomClient) DownloadRecordingFile(ctx context.Context, downloadURL stri
 }
 
 // GetAllUserRecordings retrieves all recordings for a user using pagination
-// and handles the Zoom API's 1-month maximum date range limit by splitting
-// the query into monthly chunks
+// and handles the Zoom API's 30-day maximum date range limit by splitting
+// the query into 30-day chunks
 func (c *ZoomClient) GetAllUserRecordings(ctx context.Context, userID string, params ListRecordingsParams) ([]*Recording, error) {
 	var allRecordings []*Recording
 
@@ -175,14 +175,15 @@ func (c *ZoomClient) GetAllUserRecordings(ctx context.Context, userID string, pa
 		return c.getAllRecordingsForDateRange(ctx, userID, params)
 	}
 
-	// Split date range into 1-month chunks to comply with Zoom API limit
+	// Split date range into 30-day chunks to comply with Zoom API limit
 	currentFrom := *params.From
 	endDate := *params.To
 	chunkNum := 1
 
 	for currentFrom.Before(endDate) || currentFrom.Equal(endDate) {
-		// Calculate end of this chunk (1 month from currentFrom, but not past endDate)
-		currentTo := currentFrom.AddDate(0, 1, 0)
+		// Calculate end of this chunk (30 days from currentFrom to comply with Zoom's 1-month API limit)
+		// Note: Zoom requires the date range to be <= 30 days, so we use 30 days instead of 1 calendar month
+		currentTo := currentFrom.AddDate(0, 0, 30)
 		if currentTo.After(endDate) {
 			currentTo = endDate
 		}
@@ -205,12 +206,12 @@ func (c *ZoomClient) GetAllUserRecordings(ctx context.Context, userID string, pa
 		allRecordings = append(allRecordings, recordings...)
 		fmt.Printf("[DEBUG] Zoom API chunk %d complete: fetched %d recordings\n", chunkNum, len(recordings))
 
-		// Move to next month
+		// Move to next 30-day period
 		currentFrom = currentTo.AddDate(0, 0, 1) // Add 1 day to avoid overlap
 		chunkNum++
 	}
 
-	fmt.Printf("[DEBUG] Zoom API total for user %s: fetched %d recordings across %d monthly chunks\n",
+	fmt.Printf("[DEBUG] Zoom API total for user %s: fetched %d recordings across %d chunks\n",
 		userID, len(allRecordings), chunkNum-1)
 
 	return allRecordings, nil
