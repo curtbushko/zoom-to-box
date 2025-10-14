@@ -48,6 +48,7 @@ type Recording struct {
 	TotalSize                int64                  `json:"total_size"`
 	RecordingCount           int                    `json:"recording_count"`
 	RecordingPlayPasscode    string                 `json:"recording_play_passcode,omitempty"`
+	DownloadAccessToken      string                 `json:"download_access_token,omitempty"`
 	AutoDelete               bool                   `json:"auto_delete,omitempty"`
 	AutoDeleteDate           string                 `json:"auto_delete_date,omitempty"`
 	RecordingFiles           []RecordingFile        `json:"recording_files"`

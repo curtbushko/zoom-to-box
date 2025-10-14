@@ -23,6 +23,7 @@ import (
 type mockZoomClient struct {
 	recordings map[string][]*zoom.Recording
 	recordingsError error
+	lastCallParams *zoom.ListRecordingsParams // Track last call parameters
 }
 
 func newMockZoomClient() *mockZoomClient {
@@ -32,6 +33,9 @@ func newMockZoomClient() *mockZoomClient {
 }
 
 func (m *mockZoomClient) GetAllUserRecordings(ctx context.Context, userID string, params zoom.ListRecordingsParams) ([]*zoom.Recording, error) {
+	// Store the parameters from this call for test verification
+	m.lastCallParams = &params
+
 	if m.recordingsError != nil {
 		return nil, m.recordingsError
 	}
@@ -665,6 +669,98 @@ func TestUserProcessor_ProcessAllUsers_BoxFolderAccessFails(t *testing.T) {
 
 	if len(incompleteUsers) > 0 && incompleteUsers[0].UploadComplete {
 		t.Errorf("Expected user to be marked as incomplete (upload_complete=false), but got upload_complete=true")
+	}
+}
+
+// Test: Verify GetAllUserRecordings is called without date filters (nil From/To)
+func TestUserProcessor_GetAllRecordings(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create mock clients
+	zoomClient := newMockZoomClient()
+	downloadManager := newMockDownloadManager()
+	boxClient := newMockBoxClient()
+	boxUploadManager := newMockUploadManager(boxClient)
+
+	// Add test recording (with date older than 30 days to verify it's fetched)
+	oldDate := time.Now().AddDate(0, 0, -60) // 60 days ago
+	zoomClient.recordings["john.doe@example.com"] = []*zoom.Recording{
+		{
+			UUID:      "test-uuid-old",
+			Topic:     "Old Meeting",
+			StartTime: oldDate,
+			RecordingFiles: []zoom.RecordingFile{
+				{
+					ID:          "file-old",
+					FileType:    "MP4",
+					DownloadURL: "https://zoom.us/download/old.mp4",
+					FileSize:    1024,
+				},
+			},
+		},
+	}
+
+	// Create user processor
+	config := ProcessorConfig{
+		BaseDownloadDir: tmpDir,
+		BoxEnabled:      true,
+		DeleteAfterUpload: false,
+		ContinueOnError: false,
+	}
+
+	userManager, _ := users.NewActiveUserManager(users.ActiveUserConfig{
+		FilePath:      "",
+		CaseSensitive: false,
+		WatchFile:     false,
+	})
+
+	dirManager := directory.NewDirectoryManager(directory.DirectoryConfig{
+		BaseDirectory: tmpDir,
+		CreateDirs:    true,
+	}, userManager)
+
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+
+	processor := NewUserProcessor(
+		zoomClient,
+		downloadManager,
+		dirManager,
+		filenameSanitizer,
+		boxUploadManager,
+		config,
+	)
+
+	// Process user
+	ctx := context.Background()
+	_, err := processor.ProcessUser(ctx, "john.doe@example.com", "john.doe@example.com")
+
+	if err != nil {
+		t.Fatalf("ProcessUser failed: %v", err)
+	}
+
+	// Verify that GetAllUserRecordings was called with proper date filters
+	if zoomClient.lastCallParams == nil {
+		t.Fatal("GetAllUserRecordings was not called")
+	}
+
+	// From should be set to 2020-06-30
+	if zoomClient.lastCallParams.From == nil {
+		t.Error("Expected From to be set (2020-06-30), got nil")
+	} else {
+		expectedFrom := time.Date(2020, 6, 30, 0, 0, 0, 0, time.UTC)
+		if !zoomClient.lastCallParams.From.Equal(expectedFrom) {
+			t.Errorf("Expected From to be %v, got: %v", expectedFrom, zoomClient.lastCallParams.From)
+		}
+	}
+
+	// To should be set to today (just verify it's not nil)
+	if zoomClient.lastCallParams.To == nil {
+		t.Error("Expected To to be set (today), got nil")
+	}
+
+	// Verify PageSize is still set (should be 300 for maximum efficiency)
+	if zoomClient.lastCallParams.PageSize != 300 {
+		t.Errorf("Expected PageSize to be 300, got: %d", zoomClient.lastCallParams.PageSize)
 	}
 }
 

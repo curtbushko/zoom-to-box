@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,8 +143,18 @@ func (p *userProcessorImpl) ProcessUser(ctx context.Context, zoomEmail, boxEmail
 		return result, nil // Continue with empty result
 	}
 
+	// Always log the recordings count and API parameters used
 	if logger != nil {
-		logger.InfoWithContext(ctx, fmt.Sprintf("Found %d recordings for user %s", len(recordings), zoomEmail))
+		fromStr := "nil (all time)"
+		if params.From != nil {
+			fromStr = params.From.Format("2006-01-02")
+		}
+		toStr := "nil (all time)"
+		if params.To != nil {
+			toStr = params.To.Format("2006-01-02")
+		}
+		logger.InfoWithContext(ctx, fmt.Sprintf("Zoom API returned %d recordings for user %s (from: %s, to: %s, page_size: %d)",
+			len(recordings), zoomEmail, fromStr, toStr, params.PageSize))
 	}
 
 	// If user has no recordings, skip them (mark as complete, don't create any directories/files)
@@ -349,10 +360,21 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 	// Start timing the total process (download + upload)
 	processingStartTime := time.Now()
 
+	// Prepare download URL with access token if available
+	downloadURL := recordingFile.DownloadURL
+	if recording.DownloadAccessToken != "" {
+		// Add download access token as query parameter
+		separator := "?"
+		if strings.Contains(downloadURL, "?") {
+			separator = "&"
+		}
+		downloadURL = fmt.Sprintf("%s%saccess_token=%s", downloadURL, separator, url.QueryEscape(recording.DownloadAccessToken))
+	}
+
 	// Download the file
 	downloadReq := download.DownloadRequest{
 		ID:          fmt.Sprintf("%s-%s", recording.UUID, recordingFile.ID),
-		URL:         recordingFile.DownloadURL,
+		URL:         downloadURL,
 		Destination: filePath,
 		FileSize:    recordingFile.FileSize,
 		Headers:     make(map[string]string),
@@ -821,9 +843,9 @@ func saveRecordingMetadata(ctx context.Context, recording *zoom.Recording, recor
 	return nil
 }
 
-// getFromDate returns the start date for fetching recordings (30 days ago)
+// getFromDate returns the start date for fetching recordings (2020-06-30)
 func getFromDate() *time.Time {
-	from := time.Now().AddDate(0, 0, -30)
+	from := time.Date(2020, 6, 30, 0, 0, 0, 0, time.UTC)
 	return &from
 }
 

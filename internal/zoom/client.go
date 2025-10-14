@@ -111,27 +111,27 @@ func (c *ZoomClient) ListUserRecordings(ctx context.Context, userID string, para
 func (c *ZoomClient) GetMeetingRecordings(ctx context.Context, meetingID string) (*Recording, error) {
 	// Build URL - URL encode the meeting ID to handle UUIDs and special characters
 	// Use QueryEscape to properly encode special characters including forward slashes
-	endpoint := fmt.Sprintf("%s/meetings/%s/recordings", c.baseURL, url.QueryEscape(meetingID))
-	
+	endpoint := fmt.Sprintf("%s/meetings/%s/recordings?include_fields=download_access_token", c.baseURL, url.QueryEscape(meetingID))
+
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	// Execute request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	// Parse response
 	var result Recording
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
-	
+
 	return &result, nil
 }
 
@@ -165,32 +165,90 @@ func (c *ZoomClient) DownloadRecordingFile(ctx context.Context, downloadURL stri
 }
 
 // GetAllUserRecordings retrieves all recordings for a user using pagination
+// and handles the Zoom API's 1-month maximum date range limit by splitting
+// the query into monthly chunks
 func (c *ZoomClient) GetAllUserRecordings(ctx context.Context, userID string, params ListRecordingsParams) ([]*Recording, error) {
 	var allRecordings []*Recording
+
+	// If no date range specified, use defaults
+	if params.From == nil || params.To == nil {
+		return c.getAllRecordingsForDateRange(ctx, userID, params)
+	}
+
+	// Split date range into 1-month chunks to comply with Zoom API limit
+	currentFrom := *params.From
+	endDate := *params.To
+	chunkNum := 1
+
+	for currentFrom.Before(endDate) || currentFrom.Equal(endDate) {
+		// Calculate end of this chunk (1 month from currentFrom, but not past endDate)
+		currentTo := currentFrom.AddDate(0, 1, 0)
+		if currentTo.After(endDate) {
+			currentTo = endDate
+		}
+
+		// Query this chunk
+		chunkParams := params
+		chunkParams.From = &currentFrom
+		chunkParams.To = &currentTo
+		chunkParams.NextPageToken = "" // Reset pagination for each chunk
+
+		fmt.Printf("[DEBUG] Zoom API querying chunk %d for user %s: from=%s to=%s\n",
+			chunkNum, userID, currentFrom.Format("2006-01-02"), currentTo.Format("2006-01-02"))
+
+		recordings, err := c.getAllRecordingsForDateRange(ctx, userID, chunkParams)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get recordings for chunk %d (%s to %s): %w",
+				chunkNum, currentFrom.Format("2006-01-02"), currentTo.Format("2006-01-02"), err)
+		}
+
+		allRecordings = append(allRecordings, recordings...)
+		fmt.Printf("[DEBUG] Zoom API chunk %d complete: fetched %d recordings\n", chunkNum, len(recordings))
+
+		// Move to next month
+		currentFrom = currentTo.AddDate(0, 0, 1) // Add 1 day to avoid overlap
+		chunkNum++
+	}
+
+	fmt.Printf("[DEBUG] Zoom API total for user %s: fetched %d recordings across %d monthly chunks\n",
+		userID, len(allRecordings), chunkNum-1)
+
+	return allRecordings, nil
+}
+
+// getAllRecordingsForDateRange retrieves all recordings for a single date range using pagination
+func (c *ZoomClient) getAllRecordingsForDateRange(ctx context.Context, userID string, params ListRecordingsParams) ([]*Recording, error) {
+	var recordings []*Recording
 	nextPageToken := params.NextPageToken
-	
+	pageNum := 1
+
 	for {
 		// Update params with current page token
 		currentParams := params
 		currentParams.NextPageToken = nextPageToken
-		
+
 		// Get page of recordings
 		response, err := c.ListUserRecordings(ctx, userID, currentParams)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list recordings (page token: %s): %w", nextPageToken, err)
+			return nil, fmt.Errorf("failed to list recordings (page %d, token: %s): %w", pageNum, nextPageToken, err)
 		}
-		
+
+		// Log the API response details for debugging
+		fmt.Printf("[DEBUG] Zoom API page %d for user %s: total_records=%d, page_count=%d, page_size=%d, meetings_in_response=%d, next_page_token=%s\n",
+			pageNum, userID, response.TotalRecords, response.PageCount, response.PageSize, len(response.Meetings), response.NextPageToken)
+
 		// Add recordings to result
 		for _, meeting := range response.Meetings {
-			allRecordings = append(allRecordings, &meeting)
+			recordings = append(recordings, &meeting)
 		}
-		
+
 		// Check if there are more pages
 		if response.NextPageToken == "" {
 			break
 		}
 		nextPageToken = response.NextPageToken
+		pageNum++
 	}
-	
-	return allRecordings, nil
+
+	return recordings, nil
 }
