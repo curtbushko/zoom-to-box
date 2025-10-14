@@ -408,8 +408,8 @@ func (um *boxUploadManager) UploadFileWithEmailMappingWithTime(ctx context.Conte
 		"processing_time_seconds": int64(processingTime.Seconds()),
 	})
 
-	// Track upload with processing time
-	um.trackUpload(trackingZoomEmail, result.FileName, fileSize, result.UploadDate, processingTime)
+	// Track upload with processing time using actual uploaded file size from Box
+	um.trackUpload(trackingZoomEmail, result.FileName, result.FileSize, result.UploadDate, processingTime)
 
 	return result, nil
 }
