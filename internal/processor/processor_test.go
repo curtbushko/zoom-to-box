@@ -54,6 +54,10 @@ func (m *mockZoomClient) DownloadRecordingFile(ctx context.Context, downloadURL 
 	return nil
 }
 
+func (m *mockZoomClient) GetOAuthAccessToken(ctx context.Context) (string, error) {
+	return "Bearer mock-oauth-token", nil
+}
+
 type mockDownloadManager struct {
 	downloadResults map[string]*download.DownloadResult
 	downloadError   error

@@ -138,6 +138,13 @@ func NewDownloadManager(config DownloadConfig) DownloadManager {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
 			}
+			// Preserve Authorization header across redirects
+			// This is critical for Zoom downloads which redirect to actual file URLs
+			if len(via) > 0 {
+				if auth := via[0].Header.Get("Authorization"); auth != "" {
+					req.Header.Set("Authorization", auth)
+				}
+			}
 			return nil
 		},
 	}

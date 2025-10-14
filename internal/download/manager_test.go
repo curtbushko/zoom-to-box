@@ -513,7 +513,7 @@ func TestDownloadManagerUncoveredFunctions(t *testing.T) {
 		if str != "downloading" {
 			t.Errorf("Expected 'downloading', got: %s", str)
 		}
-		
+
 		// Test another state
 		completedState := DownloadStateCompleted
 		completedStr := completedState.String()
@@ -522,4 +522,86 @@ func TestDownloadManagerUncoveredFunctions(t *testing.T) {
 		}
 	})
 
+}
+
+// TestAuthorizationHeaderPreservedOnRedirect tests that Authorization header is preserved during redirects
+func TestAuthorizationHeaderPreservedOnRedirect(t *testing.T) {
+	var receivedAuthHeader string
+	fileContent := "authenticated file content from Zoom"
+
+	// Final destination server - captures the Authorization header
+	finalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fileContent)))
+		w.WriteHeader(200)
+		w.Write([]byte(fileContent))
+	}))
+	defer finalServer.Close()
+
+	// Redirect server (simulating Zoom's download_url that redirects)
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the initial request has auth header
+		if r.Header.Get("Authorization") == "" {
+			t.Error("Initial request missing Authorization header")
+		}
+		http.Redirect(w, r, finalServer.URL+"/recording.mp4", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	// Create temp directory for download
+	tmpDir := t.TempDir()
+	destFile := filepath.Join(tmpDir, "test-recording.mp4")
+
+	// Create download manager
+	config := DownloadConfig{
+		ChunkSize:      64 * 1024,
+		RetryAttempts:  3,
+		RetryDelay:     100 * time.Millisecond,
+		Timeout:        30 * time.Second,
+		UserAgent:      "zoom-to-box/test",
+	}
+	manager := NewDownloadManager(config)
+
+	// Create download request with Authorization header (simulating Zoom download)
+	req := DownloadRequest{
+		ID:          "test-download",
+		URL:         redirectServer.URL + "/download",
+		Destination: destFile,
+		FileSize:    int64(len(fileContent)),
+		Headers: map[string]string{
+			"Authorization": "Bearer test-zoom-token-12345",
+		},
+	}
+
+	// Perform download
+	ctx := context.Background()
+	result, err := manager.Download(ctx, req, nil)
+	if err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("Download reported as not successful")
+	}
+
+	// Verify the Authorization header was preserved on the redirected request
+	if receivedAuthHeader != "Bearer test-zoom-token-12345" {
+		t.Errorf("Authorization header not preserved on redirect. Expected 'Bearer test-zoom-token-12345', got '%s'", receivedAuthHeader)
+	}
+
+	// Verify file was downloaded correctly
+	downloadedContent, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("Failed to read downloaded file: %v", err)
+	}
+
+	if string(downloadedContent) != fileContent {
+		t.Errorf("Downloaded content mismatch. Expected '%s', got '%s'", fileContent, string(downloadedContent))
+	}
+
+	// Verify file size matches
+	if result.BytesDownloaded != int64(len(fileContent)) {
+		t.Errorf("Downloaded bytes mismatch. Expected %d, got %d", len(fileContent), result.BytesDownloaded)
+	}
 }

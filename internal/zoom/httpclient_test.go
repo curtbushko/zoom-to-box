@@ -338,6 +338,72 @@ func TestRedirectHandling(t *testing.T) {
 	}
 }
 
+// TestAuthorizationHeaderPreservedOnRedirect tests that Authorization header is preserved across redirects
+func TestAuthorizationHeaderPreservedOnRedirect(t *testing.T) {
+	var receivedAuthHeader string
+
+	// Final destination server - captures the Authorization header
+	finalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("authenticated file content"))
+	}))
+	defer finalServer.Close()
+
+	// Redirect server
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the initial request has auth header
+		if r.Header.Get("Authorization") == "" {
+			t.Error("Initial request missing Authorization header")
+		}
+		http.Redirect(w, r, finalServer.URL+"/file.mp4", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	clientConfig := HTTPClientConfig{
+		Timeout:         30 * time.Second,
+		MaxRetries:      3,
+		FollowRedirects: true,
+		MaxRedirects:    10,
+	}
+
+	client := NewRetryHTTPClient(clientConfig)
+
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, "GET", redirectServer.URL+"/download", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	// Add Authorization header (simulating Zoom download with bearer token)
+	req.Header.Set("Authorization", "Bearer test-token-12345")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Expected status 200 after redirect, got %d", resp.StatusCode)
+	}
+
+	// Verify the Authorization header was preserved on the redirected request
+	if receivedAuthHeader != "Bearer test-token-12345" {
+		t.Errorf("Authorization header not preserved on redirect. Expected 'Bearer test-token-12345', got '%s'", receivedAuthHeader)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	if string(body) != "authenticated file content" {
+		t.Errorf("Expected 'authenticated file content', got %s", string(body))
+	}
+}
+
 // TestZoomAPIErrorHandling tests Zoom-specific API error responses
 func TestZoomAPIErrorHandling(t *testing.T) {
 	tests := []struct {

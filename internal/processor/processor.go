@@ -72,6 +72,7 @@ type ProcessorSummary struct {
 // ZoomClientInterface defines the methods we need from ZoomClient
 type ZoomClientInterface interface {
 	GetAllUserRecordings(ctx context.Context, userID string, params zoom.ListRecordingsParams) ([]*zoom.Recording, error)
+	GetOAuthAccessToken(ctx context.Context) (string, error)
 }
 
 // userProcessorImpl implements the UserProcessor interface
@@ -365,8 +366,18 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 
 	// Add download access token as Authorization Bearer header (not query parameter)
 	// This prevents file size limitations that occur when using query parameter tokens
+	// Use download_access_token if available, otherwise fall back to OAuth token
 	if recording.DownloadAccessToken != "" {
 		headers["Authorization"] = fmt.Sprintf("Bearer %s", recording.DownloadAccessToken)
+	} else {
+		// Fall back to OAuth access token if download_access_token is not available
+		// This happens when "View the recording content" permission is not enabled
+		oauthToken, err := p.zoomClient.GetOAuthAccessToken(ctx)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to get access token for download: %w", err)
+			return result
+		}
+		headers["Authorization"] = oauthToken
 	}
 
 	// Download the file

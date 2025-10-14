@@ -79,7 +79,11 @@ func (c *ZoomClient) ListUserRecordings(ctx context.Context, userID string, para
 	if params.TrashType != "" {
 		queryParams.Set("trash_type", params.TrashType)
 	}
-	
+
+	// Request download_access_token to be included in the response
+	// This is required to download files with proper authorization
+	queryParams.Set("include_fields", "download_access_token")
+
 	// Add query parameters to URL
 	if len(queryParams) > 0 {
 		endpoint += "?" + queryParams.Encode()
@@ -162,6 +166,16 @@ func (c *ZoomClient) DownloadRecordingFile(ctx context.Context, downloadURL stri
 	}
 	
 	return nil
+}
+
+// GetOAuthAccessToken retrieves the current OAuth access token for authenticated requests
+// This can be used as a fallback when download_access_token is not available
+func (c *ZoomClient) GetOAuthAccessToken(ctx context.Context) (string, error) {
+	token, err := c.httpClient.auth.GetAccessToken(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get OAuth access token: %w", err)
+	}
+	return fmt.Sprintf("%s %s", token.TokenType, token.AccessToken), nil
 }
 
 // GetAllUserRecordings retrieves all recordings for a user using pagination
