@@ -33,6 +33,12 @@ type BoxClient interface {
 	GetFile(fileID string) (*File, error)
 	DeleteFile(fileID string) error
 	FindFileByName(folderID string, name string) (*File, error)
+
+	// Chunked upload operations (for files >= 20MB)
+	CreateUploadSession(fileName string, folderID string, fileSize int64) (*UploadSession, error)
+	UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*UploadPart, error)
+	CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error)
+	AbortUploadSession(sessionID string) error
 }
 
 // ProgressCallback is called during file upload to report progress
@@ -196,6 +202,55 @@ type UploadFileRequest struct {
 	Parent *FolderParent `json:"parent"`
 }
 
+// UploadSession represents a chunked upload session
+type UploadSession struct {
+	ID                string                  `json:"id"`
+	Type              string                  `json:"type"`
+	SessionExpiresAt  time.Time               `json:"session_expires_at"`
+	PartSize          int64                   `json:"part_size"`
+	TotalParts        int                     `json:"total_parts"`
+	NumPartsProcessed int                     `json:"num_parts_processed"`
+	SessionEndpoints  *UploadSessionEndpoints `json:"session_endpoints,omitempty"`
+}
+
+// UploadSessionEndpoints contains URLs for upload operations
+type UploadSessionEndpoints struct {
+	UploadPart  string `json:"upload_part,omitempty"`
+	Commit      string `json:"commit,omitempty"`
+	Abort       string `json:"abort,omitempty"`
+	ListParts   string `json:"list_parts,omitempty"`
+	Status      string `json:"status,omitempty"`
+	LogEvent    string `json:"log_event,omitempty"`
+}
+
+// CreateUploadSessionRequest represents the request to create an upload session
+type CreateUploadSessionRequest struct {
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"`
+	FolderID string `json:"folder_id"`
+}
+
+// UploadPart represents information about an uploaded part
+type UploadPart struct {
+	Part   *UploadPartInfo `json:"part"`
+	Offset int64           `json:"offset,omitempty"`
+	Size   int64           `json:"size,omitempty"`
+}
+
+// UploadPartInfo contains digest and offset for a completed upload part
+type UploadPartInfo struct {
+	PartID string `json:"part_id,omitempty"`
+	Offset int64  `json:"offset"`
+	Size   int64  `json:"size"`
+	SHA1   string `json:"sha1,omitempty"`
+}
+
+// CommitUploadSessionRequest represents the request to commit an upload session
+type CommitUploadSessionRequest struct {
+	Parts      []UploadPartInfo       `json:"parts"`
+	Attributes map[string]interface{} `json:"attributes,omitempty"`
+}
+
 // TokenResponse represents Box OAuth token response
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -256,20 +311,24 @@ const (
 	BoxUploadBaseURL = "https://upload.box.com/api/2.0"
 	BoxAuthURL       = "https://account.box.com/api/oauth2/authorize"
 	BoxTokenURL      = "https://api.box.com/oauth2/token"
-	
+
 	// Folder IDs
 	RootFolderID = "0"
-	
+
 	// Item types
 	ItemTypeFile   = "file"
 	ItemTypeFolder = "folder"
-	
+
+	// Upload limits
+	MinChunkedUploadSize = 20 * 1024 * 1024 // 20MB minimum for chunked uploads
+	DefaultChunkSize     = 8 * 1024 * 1024  // 8MB default chunk size
+
 	// OAuth scopes
 	ScopeBaseExplorer = "base_explorer"
 	ScopeBaseUpload   = "base_upload"
 	ScopeBaseWrite    = "base_write"
 	ScopeBasePreview  = "base_preview"
-	
+
 	// Error codes
 	ErrorCodeItemNotFound      = "not_found"
 	ErrorCodeItemNameTaken     = "item_name_taken"

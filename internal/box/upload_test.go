@@ -195,6 +195,23 @@ func (m *mockBoxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error
 	return nil, &BoxError{StatusCode: 404, Code: ErrorCodeItemNotFound, Message: "not implemented in mock"}
 }
 
+// Chunked upload methods (not fully implemented in mock, but satisfy interface)
+func (m *mockBoxClient) CreateUploadSession(fileName string, folderID string, fileSize int64) (*UploadSession, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*UploadPart, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) AbortUploadSession(sessionID string) error {
+	return fmt.Errorf("not implemented in mock")
+}
+
 type mockStatusTracker struct {
 	entries map[string]download.DownloadEntry
 }
@@ -648,22 +665,22 @@ func TestExtractFolderPathFromLocalPath(t *testing.T) {
 		{
 			name:      "standard path structure",
 			localPath: "/home/user/downloads/john.doe/2024/01/15/meeting-recording.mp4",
-			expected:  "john.doe/2024/01/15",
+			expected:  "2024/01/15", // Only year/month/day, username excluded (baseFolderID is user's zoom folder)
 		},
 		{
 			name:      "relative path",
 			localPath: "./downloads/user@example.com/2024/03/10/file.mp4",
-			expected:  "user@example.com/2024/03/10",
+			expected:  "2024/03/10",
 		},
 		{
 			name:      "path with spaces",
 			localPath: "/Users/me/My Downloads/john doe/2024/06/01/video.mp4",
-			expected:  "john doe/2024/06/01",
+			expected:  "2024/06/01",
 		},
 		{
 			name:      "absolute path with base directory",
 			localPath: "/var/data/zoom-recordings/jane.smith/2024/12/25/holiday-meeting.mp4",
-			expected:  "jane.smith/2024/12/25",
+			expected:  "2024/12/25",
 		},
 	}
 

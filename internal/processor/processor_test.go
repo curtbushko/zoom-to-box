@@ -210,6 +210,23 @@ func (m *mockBoxClient) UploadFileAsUser(filePath string, parentFolderID string,
 	return m.UploadFileWithProgress(filePath, parentFolderID, fileName, progressCallback)
 }
 
+// Chunked upload methods (not fully implemented in mock, but satisfy interface)
+func (m *mockBoxClient) CreateUploadSession(fileName string, folderID string, fileSize int64) (*box.UploadSession, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*box.UploadPart, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []box.UploadPartInfo, attributes map[string]interface{}) (*box.File, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockBoxClient) AbortUploadSession(sessionID string) error {
+	return fmt.Errorf("not implemented in mock")
+}
+
 // Mock Upload Manager
 type mockUploadManager struct {
 	boxClient      *mockBoxClient

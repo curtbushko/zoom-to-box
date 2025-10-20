@@ -3,6 +3,8 @@ package box
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -527,13 +529,25 @@ func (c *boxClient) UploadFileWithProgress(filePath string, parentFolderID strin
 		fileName = filepath.Base(filePath)
 	}
 
+	// Check file size to determine upload method
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Use chunked upload for files >= 20MB
+	if fileInfo.Size() >= MinChunkedUploadSize {
+		return c.UploadLargeFile(filePath, parentFolderID, fileName, progressCallback)
+	}
+
+	// Use regular upload for smaller files
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
-	fileInfo, err := file.Stat()
+	fileInfo, err = file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file info: %w", err)
 	}
@@ -989,4 +1003,265 @@ func ValidateFolderStructure(client BoxClient, folderPath string, parentID strin
 		return fmt.Errorf("folder structure validation failed: %w", err)
 	}
 	return nil
+}
+
+// CreateUploadSession creates a new chunked upload session
+func (c *boxClient) CreateUploadSession(fileName string, folderID string, fileSize int64) (*UploadSession, error) {
+	if strings.TrimSpace(fileName) == "" {
+		return nil, fmt.Errorf("file name cannot be empty")
+	}
+	if folderID == "" {
+		folderID = RootFolderID
+	}
+	if fileSize < MinChunkedUploadSize {
+		return nil, fmt.Errorf("file size %d is less than minimum chunked upload size %d", fileSize, MinChunkedUploadSize)
+	}
+
+	request := CreateUploadSessionRequest{
+		FileName: fileName,
+		FolderID: folderID,
+		FileSize: fileSize,
+	}
+
+	url := fmt.Sprintf("%s/files/upload_sessions", BoxUploadBaseURL)
+	resp, err := c.httpClient.PostJSON(context.Background(), url, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create upload session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create upload session, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var session UploadSession
+	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+		return nil, fmt.Errorf("failed to decode upload session response: %w", err)
+	}
+
+	return &session, nil
+}
+
+// UploadPart uploads a single part of a chunked upload
+func (c *boxClient) UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*UploadPart, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session ID cannot be empty")
+	}
+	if len(part) == 0 {
+		return nil, fmt.Errorf("part data cannot be empty")
+	}
+
+	// Calculate content range
+	partSize := int64(len(part))
+	rangeEnd := offset + partSize - 1
+	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, rangeEnd, totalSize)
+
+	// Create request
+	url := fmt.Sprintf("%s/files/upload_sessions/%s", BoxUploadBaseURL, sessionID)
+	req, err := http.NewRequestWithContext(context.Background(), "PUT", url, bytes.NewReader(part))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create upload part request: %w", err)
+	}
+
+	// Set headers - note: we're not setting Digest header as Box doesn't require it for parts
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Range", contentRange)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload part: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to upload part, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var uploadPart UploadPart
+	if err := json.NewDecoder(resp.Body).Decode(&uploadPart); err != nil {
+		return nil, fmt.Errorf("failed to decode upload part response: %w", err)
+	}
+
+	return &uploadPart, nil
+}
+
+// CommitUploadSession commits a chunked upload session
+func (c *boxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session ID cannot be empty")
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("parts list cannot be empty")
+	}
+
+	request := CommitUploadSessionRequest{
+		Parts:      parts,
+		Attributes: attributes,
+	}
+
+	url := fmt.Sprintf("%s/files/upload_sessions/%s/commit", BoxUploadBaseURL, sessionID)
+	resp, err := c.httpClient.PostJSON(context.Background(), url, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to commit upload session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Box may return 202 Accepted if processing is still ongoing
+	if resp.StatusCode == http.StatusAccepted {
+		// Check Retry-After header
+		retryAfter := resp.Header.Get("Retry-After")
+		return nil, fmt.Errorf("upload session commit still processing, retry after: %s seconds", retryAfter)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to commit upload session, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	// Response contains entries array like regular upload
+	var uploadResponse struct {
+		TotalCount int     `json:"total_count"`
+		Entries    []*File `json:"entries"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&uploadResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode commit response: %w", err)
+	}
+
+	if len(uploadResponse.Entries) == 0 {
+		return nil, fmt.Errorf("no file entries in commit response")
+	}
+
+	return uploadResponse.Entries[0], nil
+}
+
+// AbortUploadSession aborts a chunked upload session
+func (c *boxClient) AbortUploadSession(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session ID cannot be empty")
+	}
+
+	url := fmt.Sprintf("%s/files/upload_sessions/%s", BoxUploadBaseURL, sessionID)
+	req, err := http.NewRequestWithContext(context.Background(), "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create abort request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to abort upload session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to abort upload session, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UploadLargeFile uploads a file using chunked upload API
+// This is a helper function that orchestrates the entire chunked upload process
+func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, fileName string, progressCallback ProgressCallback) (*File, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return nil, fmt.Errorf("file path cannot be empty")
+	}
+	if parentFolderID == "" {
+		parentFolderID = RootFolderID
+	}
+	if fileName == "" {
+		fileName = filepath.Base(filePath)
+	}
+
+	// Open file and get size
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	totalSize := fileInfo.Size()
+
+	// Create upload session
+	session, err := c.CreateUploadSession(fileName, parentFolderID, totalSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create upload session: %w", err)
+	}
+
+	// Track uploaded parts for commit
+	var uploadedParts []UploadPartInfo
+	var offset int64 = 0
+	partSize := session.PartSize
+	if partSize == 0 {
+		partSize = DefaultChunkSize
+	}
+
+	// Upload parts
+	buffer := make([]byte, partSize)
+	for offset < totalSize {
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			// Upload this part
+			part := buffer[:n]
+			uploadPart, err := c.UploadPart(session.ID, part, offset, totalSize)
+			if err != nil {
+				// Abort session on error
+				_ = c.AbortUploadSession(session.ID)
+				return nil, fmt.Errorf("failed to upload part at offset %d: %w", offset, err)
+			}
+
+			// Track the uploaded part
+			if uploadPart.Part != nil {
+				uploadedParts = append(uploadedParts, *uploadPart.Part)
+			} else {
+				// If Box didn't return part info, create it
+				h := sha1.New()
+				h.Write(part)
+				sha1Hash := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+				uploadedParts = append(uploadedParts, UploadPartInfo{
+					Offset: offset,
+					Size:   int64(n),
+					SHA1:   sha1Hash,
+				})
+			}
+
+			offset += int64(n)
+
+			// Report progress
+			if progressCallback != nil {
+				progressCallback(offset, totalSize)
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			_ = c.AbortUploadSession(session.ID)
+			return nil, fmt.Errorf("failed to read file: %w", readErr)
+		}
+	}
+
+	// Commit the upload session
+	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, nil)
+	if err != nil {
+		// Don't abort on commit error - the session might still be processing
+		return nil, fmt.Errorf("failed to commit upload session: %w", err)
+	}
+
+	// Final progress callback
+	if progressCallback != nil {
+		progressCallback(totalSize, totalSize)
+	}
+
+	return uploadedFile, nil
 }
