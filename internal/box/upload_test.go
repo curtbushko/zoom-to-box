@@ -211,7 +211,7 @@ func (m *mockBoxClient) UploadPart(sessionID string, part []byte, offset int64, 
 	return nil, fmt.Errorf("not implemented in mock")
 }
 
-func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error) {
+func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}, digest string) (*File, error) {
 	return nil, fmt.Errorf("not implemented in mock")
 }
 
@@ -1104,7 +1104,9 @@ func TestCommitUploadSession_WithAttributes(t *testing.T) {
 		"content_created_at": "2024-01-15T10:30:00Z",
 	}
 
-	_, err := client.CommitUploadSession("test-session", parts, attributes)
+	digest := "sha=testdigest123"
+
+	_, err := client.CommitUploadSession("test-session", parts, attributes, digest)
 	if err != nil {
 		t.Fatalf("CommitUploadSession failed: %v", err)
 	}
@@ -1133,6 +1135,12 @@ func TestCommitUploadSession_WithAttributes(t *testing.T) {
 
 	if desc, ok := commitReq.Attributes["description"].(string); !ok || desc != "Test video file" {
 		t.Errorf("Expected description attribute, got %v", commitReq.Attributes["description"])
+	}
+
+	// Verify Digest header is set
+	digestHeader := capturedRequest.Header.Get("Digest")
+	if digestHeader != digest {
+		t.Errorf("Expected Digest header '%s', got '%s'", digest, digestHeader)
 	}
 }
 

@@ -219,7 +219,7 @@ func (m *mockBoxClient) UploadPart(sessionID string, part []byte, offset int64, 
 	return nil, fmt.Errorf("not implemented in mock")
 }
 
-func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []box.UploadPartInfo, attributes map[string]interface{}) (*box.File, error) {
+func (m *mockBoxClient) CommitUploadSession(sessionID string, parts []box.UploadPartInfo, attributes map[string]interface{}, digest string) (*box.File, error) {
 	return nil, fmt.Errorf("not implemented in mock")
 }
 

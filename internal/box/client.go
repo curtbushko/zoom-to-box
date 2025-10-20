@@ -1201,12 +1201,15 @@ func validateUploadedParts(parts []UploadPartInfo, totalSize int64) error {
 }
 
 // CommitUploadSession commits a chunked upload session
-func (c *boxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error) {
+func (c *boxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}, digest string) (*File, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("parts list cannot be empty")
+	}
+	if digest == "" {
+		return nil, fmt.Errorf("digest cannot be empty")
 	}
 
 	request := CommitUploadSessionRequest{
@@ -1215,7 +1218,23 @@ func (c *boxClient) CommitUploadSession(sessionID string, parts []UploadPartInfo
 	}
 
 	url := fmt.Sprintf("%s/files/upload_sessions/%s/commit", BoxUploadBaseURL, sessionID)
-	resp, err := c.httpClient.PostJSON(context.Background(), url, request)
+
+	// Marshal request to JSON
+	requestBody, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal commit request: %w", err)
+	}
+
+	// Create HTTP request to add custom Digest header
+	req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create commit request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Digest", digest)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit upload session: %w", err)
 	}
@@ -1276,6 +1295,25 @@ func (c *boxClient) AbortUploadSession(sessionID string) error {
 	return nil
 }
 
+// calculateFileSHA1 computes the SHA-1 hash of an entire file
+// Returns the hash in the format "sha=<base64-encoded-hash>" as required by Box API
+func calculateFileSHA1(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	h := sha1.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return "", fmt.Errorf("failed to calculate SHA-1: %w", err)
+	}
+
+	sha1Hash := h.Sum(nil)
+	digest := "sha=" + base64.StdEncoding.EncodeToString(sha1Hash)
+	return digest, nil
+}
+
 // UploadLargeFile uploads a file using chunked upload API
 // This is a helper function that orchestrates the entire chunked upload process
 func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, fileName string, progressCallback ProgressCallback) (*File, error) {
@@ -1302,6 +1340,12 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 	}
 
 	totalSize := fileInfo.Size()
+
+	// Calculate SHA-1 digest of entire file for commit
+	fileSHA1, err := calculateFileSHA1(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate file digest: %w", err)
+	}
 
 	// Create upload session
 	session, err := c.CreateUploadSession(fileName, parentFolderID, totalSize)
@@ -1379,8 +1423,8 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 		"name": fileName,
 	}
 
-	// Commit the upload session with file metadata
-	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, attributes)
+	// Commit the upload session with file metadata and digest
+	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, attributes, fileSHA1)
 	if err != nil {
 		// Don't abort on commit error - the session might still be processing
 		return nil, fmt.Errorf("failed to commit upload session: %w", err)

@@ -37,7 +37,7 @@ type BoxClient interface {
 	// Chunked upload operations (for files >= 20MB)
 	CreateUploadSession(fileName string, folderID string, fileSize int64) (*UploadSession, error)
 	UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*UploadPart, error)
-	CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}) (*File, error)
+	CommitUploadSession(sessionID string, parts []UploadPartInfo, attributes map[string]interface{}, digest string) (*File, error)
 	AbortUploadSession(sessionID string) error
 }
 
