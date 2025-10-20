@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type boxClient struct {
@@ -1043,7 +1044,7 @@ func (c *boxClient) CreateUploadSession(fileName string, folderID string, fileSi
 	return &session, nil
 }
 
-// UploadPart uploads a single part of a chunked upload
+// UploadPart uploads a single part of a chunked upload with retry logic
 func (c *boxClient) UploadPart(sessionID string, part []byte, offset int64, totalSize int64) (*UploadPart, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
@@ -1052,39 +1053,151 @@ func (c *boxClient) UploadPart(sessionID string, part []byte, offset int64, tota
 		return nil, fmt.Errorf("part data cannot be empty")
 	}
 
+	// Calculate SHA1 digest for data integrity validation
+	h := sha1.New()
+	h.Write(part)
+	sha1Hash := h.Sum(nil)
+	digest := "sha=" + base64.StdEncoding.EncodeToString(sha1Hash)
+
 	// Calculate content range
 	partSize := int64(len(part))
 	rangeEnd := offset + partSize - 1
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, rangeEnd, totalSize)
 
-	// Create request
-	url := fmt.Sprintf("%s/files/upload_sessions/%s", BoxUploadBaseURL, sessionID)
-	req, err := http.NewRequestWithContext(context.Background(), "PUT", url, bytes.NewReader(part))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create upload part request: %w", err)
+	// Use retry logic for transient failures
+	maxRetries := 3
+	var lastErr error
+	var uploadPart *UploadPart
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Create request for each attempt (can't reuse request body)
+		url := fmt.Sprintf("%s/files/upload_sessions/%s", BoxUploadBaseURL, sessionID)
+		req, err := http.NewRequestWithContext(context.Background(), "PUT", url, bytes.NewReader(part))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create upload part request: %w", err)
+		}
+
+		// Set headers with SHA1 digest for data integrity
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Content-Range", contentRange)
+		req.Header.Set("Digest", digest)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			// Check if error is retryable (network/timeout errors)
+			if isRetryableError(err) && attempt < maxRetries-1 {
+				// Exponential backoff: 500ms, 1s, 2s
+				backoff := 500 * (1 << attempt) * time.Millisecond
+				time.Sleep(backoff)
+				continue
+			}
+			return nil, fmt.Errorf("failed to upload part after %d attempts: %w", attempt+1, err)
+		}
+		defer resp.Body.Close()
+
+		// Check for retryable HTTP status codes
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			lastErr = fmt.Errorf("failed to upload part, status: %d, body: %s", resp.StatusCode, string(body))
+
+			// Retry on 5xx server errors and 429 rate limit
+			if (resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests) && attempt < maxRetries-1 {
+				backoff := 500 * (1 << attempt) * time.Millisecond
+				if resp.StatusCode == http.StatusTooManyRequests {
+					// Longer backoff for rate limits
+					backoff = 5 * time.Second
+				}
+				time.Sleep(backoff)
+				continue
+			}
+			return nil, lastErr
+		}
+
+		// Success - decode response
+		if err := json.NewDecoder(resp.Body).Decode(&uploadPart); err != nil {
+			return nil, fmt.Errorf("failed to decode upload part response: %w", err)
+		}
+
+		return uploadPart, nil
 	}
 
-	// Set headers - note: we're not setting Digest header as Box doesn't require it for parts
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Content-Range", contentRange)
+	return nil, fmt.Errorf("failed to upload part after %d attempts: %w", maxRetries, lastErr)
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upload part: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to upload part, status: %d, body: %s", resp.StatusCode, string(body))
+// isRetryableError checks if an error is transient and should be retried
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
 	}
 
-	var uploadPart UploadPart
-	if err := json.NewDecoder(resp.Body).Decode(&uploadPart); err != nil {
-		return nil, fmt.Errorf("failed to decode upload part response: %w", err)
+	// Check for context errors (don't retry if context was canceled/timed out)
+	if err == context.Canceled || err == context.DeadlineExceeded {
+		return false
 	}
 
-	return &uploadPart, nil
+	// Check for network errors
+	errStr := err.Error()
+	retryablePatterns := []string{
+		"connection reset",
+		"connection refused",
+		"no such host",
+		"network",
+		"timeout",
+		"temporary failure",
+		"TLS handshake",
+		"EOF",
+	}
+
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(strings.ToLower(errStr), strings.ToLower(pattern)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// validateUploadedParts validates that uploaded parts are complete and sequential
+func validateUploadedParts(parts []UploadPartInfo, totalSize int64) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("no parts uploaded")
+	}
+
+	// Sort parts by offset to ensure sequential validation
+	// Note: In practice, parts should already be in order from upload loop
+	var expectedOffset int64 = 0
+	var totalBytes int64 = 0
+
+	for i, part := range parts {
+		// Check for gaps or overlaps
+		if part.Offset != expectedOffset {
+			if part.Offset < expectedOffset {
+				return fmt.Errorf("part %d overlaps: offset %d, expected %d", i, part.Offset, expectedOffset)
+			}
+			return fmt.Errorf("gap detected before part %d: offset %d, expected %d", i, part.Offset, expectedOffset)
+		}
+
+		// Validate part size
+		if part.Size <= 0 {
+			return fmt.Errorf("part %d has invalid size: %d", i, part.Size)
+		}
+
+		// Validate SHA1 is present
+		if part.SHA1 == "" {
+			return fmt.Errorf("part %d missing SHA1 hash", i)
+		}
+
+		expectedOffset += part.Size
+		totalBytes += part.Size
+	}
+
+	// Verify total size matches
+	if totalBytes != totalSize {
+		return fmt.Errorf("total uploaded size %d does not match expected size %d", totalBytes, totalSize)
+	}
+
+	return nil
 }
 
 // CommitUploadSession commits a chunked upload session
@@ -1209,8 +1322,10 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 	for offset < totalSize {
 		n, readErr := file.Read(buffer)
 		if n > 0 {
-			// Upload this part
-			part := buffer[:n]
+			// Upload this part - make a copy to avoid buffer reuse issues
+			part := make([]byte, n)
+			copy(part, buffer[:n])
+
 			uploadPart, err := c.UploadPart(session.ID, part, offset, totalSize)
 			if err != nil {
 				// Abort session on error
@@ -1218,21 +1333,23 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 				return nil, fmt.Errorf("failed to upload part at offset %d: %w", offset, err)
 			}
 
-			// Track the uploaded part
-			if uploadPart.Part != nil {
-				uploadedParts = append(uploadedParts, *uploadPart.Part)
-			} else {
-				// If Box didn't return part info, create it
-				h := sha1.New()
-				h.Write(part)
-				sha1Hash := base64.StdEncoding.EncodeToString(h.Sum(nil))
+			// Track the uploaded part - always calculate SHA1 for validation
+			h := sha1.New()
+			h.Write(part)
+			sha1Hash := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
-				uploadedParts = append(uploadedParts, UploadPartInfo{
-					Offset: offset,
-					Size:   int64(n),
-					SHA1:   sha1Hash,
-				})
+			partInfo := UploadPartInfo{
+				Offset: offset,
+				Size:   int64(n),
+				SHA1:   sha1Hash,
 			}
+
+			// Use Box-returned part info if available, otherwise use our calculated values
+			if uploadPart.Part != nil {
+				partInfo = *uploadPart.Part
+			}
+
+			uploadedParts = append(uploadedParts, partInfo)
 
 			offset += int64(n)
 
@@ -1251,8 +1368,19 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 		}
 	}
 
-	// Commit the upload session
-	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, nil)
+	// Validate uploaded parts before committing
+	if err := validateUploadedParts(uploadedParts, totalSize); err != nil {
+		_ = c.AbortUploadSession(session.ID)
+		return nil, fmt.Errorf("upload validation failed: %w", err)
+	}
+
+	// Prepare file attributes for commit
+	attributes := map[string]interface{}{
+		"name": fileName,
+	}
+
+	// Commit the upload session with file metadata
+	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, attributes)
 	if err != nil {
 		// Don't abort on commit error - the session might still be processing
 		return nil, fmt.Errorf("failed to commit upload session: %w", err)

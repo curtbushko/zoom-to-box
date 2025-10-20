@@ -525,10 +525,17 @@ func (um *boxUploadManager) UploadWithResume(ctx context.Context, localPath, vid
 	if err == nil && boxInfo != nil {
 		// Check if upload was completed successfully
 		if boxInfo.Uploaded && boxInfo.FileID != "" {
-			// Validate the existing upload
-			valid, err := um.ValidateUploadedFile(ctx, boxInfo.FileID, 0) // Size will be checked by ValidateUploadedFile
-			if err == nil && valid {
-				// Upload already exists and is valid
+			// IMPORTANT: Validate the file actually exists in Box before skipping upload
+			// This prevents the bug where local status says "uploaded" but file doesn't exist in Box
+			valid, validateErr := um.ValidateUploadedFile(ctx, boxInfo.FileID, 0)
+			if validateErr != nil {
+				// Error during validation - log and proceed with re-upload
+				logging.Warn("Failed to validate existing upload for %s (file ID: %s): %v - will re-upload",
+					downloadID, boxInfo.FileID, validateErr)
+			} else if valid {
+				// Upload already exists in Box and is valid - skip upload
+				logging.Info("File already exists in Box for %s (file ID: %s) - skipping upload",
+					downloadID, boxInfo.FileID)
 				return &UploadResult{
 					Success:    true,
 					FileID:     boxInfo.FileID,
@@ -537,14 +544,16 @@ func (um *boxUploadManager) UploadWithResume(ctx context.Context, localPath, vid
 					UploadDate: boxInfo.UploadDate,
 					Duration:   0, // No upload time since it was already done
 				}, nil
+			} else {
+				// File doesn't exist in Box or validation failed - need to re-upload
+				logging.Warn("Existing upload validation failed for %s (file ID: %s) - will re-upload",
+					downloadID, boxInfo.FileID)
 			}
-
-			logging.Warn("Existing upload validation failed for %s, will re-upload", downloadID)
 		}
 
 		// Check if we should retry failed uploads
-		if !download.ShouldRetryBoxUpload(download.DownloadEntry{Box: boxInfo}, um.maxRetries) {
-			return nil, fmt.Errorf("upload for %s exceeded max retries", downloadID)
+		if boxInfo.UploadError != "" && !download.ShouldRetryBoxUpload(download.DownloadEntry{Box: boxInfo}, um.maxRetries) {
+			return nil, fmt.Errorf("upload for %s exceeded max retries (%d): %s", downloadID, um.maxRetries, boxInfo.UploadError)
 		}
 	}
 

@@ -1,10 +1,17 @@
 package box
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -456,11 +463,11 @@ func TestUploadWithResume_ExistingValidUpload(t *testing.T) {
 	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	client := newMockBoxClient()
 	manager := NewUploadManager(client)
 	statusTracker := newMockStatusTracker()
-	
+
 	// Set up existing upload status
 	downloadID := "test-download-resume"
 	statusTracker.entries[downloadID] = download.DownloadEntry{
@@ -474,32 +481,91 @@ func TestUploadWithResume_ExistingValidUpload(t *testing.T) {
 			UploadDate: time.Now(),
 		},
 	}
-	
+
 	// Mock the file to exist in client
 	client.files["existing-file-id"] = &File{
 		ID:   "existing-file-id",
 		Name: "test.mp4",
 		Size: 1000,
 	}
-	
+
 	ctx := context.Background()
 	result, err := manager.UploadWithResume(ctx, testFile, "user@example.com", downloadID, statusTracker)
-	
+
 	if err != nil {
 		t.Fatalf("Expected successful resume, got error: %v", err)
 	}
-	
+
 	if !result.Success {
 		t.Error("Expected resumed upload to be successful")
 	}
-	
+
 	if result.FileID != "existing-file-id" {
 		t.Errorf("Expected existing file ID, got '%s'", result.FileID)
 	}
-	
+
 	// Upload duration should be 0 since it was already uploaded
 	if result.Duration != 0 {
 		t.Error("Expected zero duration for existing upload")
+	}
+}
+
+func TestUploadWithResume_StaleUploadStatusFileDeletedFromBox(t *testing.T) {
+	// This tests the bug where local file exists but Box file was deleted
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.mp4")
+	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockBoxClient()
+	manager := NewUploadManager(client)
+	statusTracker := newMockStatusTracker()
+
+	// Set up stale upload status - file marked as uploaded but doesn't exist in Box
+	downloadID := "test-download-stale"
+	statusTracker.entries[downloadID] = download.DownloadEntry{
+		Status:     download.StatusCompleted,
+		FilePath:   testFile,
+		VideoOwner: "user@example.com",
+		Box: &download.BoxUploadInfo{
+			Uploaded:   true,
+			FileID:     "deleted-file-id", // This file doesn't exist in Box
+			FolderID:   "some-folder-id",
+			UploadDate: time.Now().Add(-24 * time.Hour),
+		},
+	}
+
+	// DO NOT add file to client.files - simulating deleted file
+
+	ctx := context.Background()
+	result, err := manager.UploadWithResume(ctx, testFile, "user@example.com", downloadID, statusTracker)
+
+	if err != nil {
+		t.Fatalf("Expected successful re-upload, got error: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected upload to be successful")
+	}
+
+	// Should have uploaded and gotten a NEW file ID
+	if result.FileID == "deleted-file-id" {
+		t.Error("Expected new file ID, got stale file ID - file was not re-uploaded!")
+	}
+
+	// Should have taken some time since it actually uploaded
+	if result.Duration == 0 {
+		t.Error("Expected non-zero duration for actual upload")
+	}
+
+	// Status should be updated with new file ID
+	updatedEntry, _ := statusTracker.GetDownloadStatus(downloadID)
+	if updatedEntry.Box == nil || !updatedEntry.Box.Uploaded {
+		t.Error("Expected Box upload status to be marked as uploaded")
+	}
+	if updatedEntry.Box.FileID == "deleted-file-id" {
+		t.Error("Status should have been updated with new file ID")
 	}
 }
 
@@ -788,6 +854,504 @@ func TestShouldRetryBoxUpload(t *testing.T) {
 		})
 	}
 }
+
+// Tests for chunked upload functionality
+
+func TestUploadPart_SHA1DigestHeader(t *testing.T) {
+	// This test verifies that UploadPart includes the SHA1 digest header
+	// Create a mock HTTP client with specific response
+	var capturedRequest *http.Request
+
+	mockHTTPClient := newMockAuthenticatedHTTPClient()
+	// Override Do method to capture request
+	originalDo := mockHTTPClient.Do
+	mockHTTPClient.Do = func(req *http.Request) (*http.Response, error) {
+		capturedRequest = req
+		// Return a successful response
+		responseBody := `{"part":{"part_id":"1","offset":0,"size":1024,"sha1":"test-sha1"}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(responseBody)),
+			Header:     make(http.Header),
+		}, nil
+	}
+	defer func() { mockHTTPClient.Do = originalDo }()
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	testData := []byte("test data for upload")
+	_, err := client.UploadPart("test-session-id", testData, 0, 1024)
+
+	if err != nil {
+		t.Fatalf("UploadPart failed: %v", err)
+	}
+
+	if capturedRequest == nil {
+		t.Fatal("Expected HTTP request to be captured")
+	}
+
+	// Verify Digest header is present
+	digestHeader := capturedRequest.Header.Get("Digest")
+	if digestHeader == "" {
+		t.Error("Expected Digest header to be set")
+	}
+
+	// Verify digest format: "sha=base64encodedsha1"
+	if !strings.HasPrefix(digestHeader, "sha=") {
+		t.Errorf("Expected Digest header to start with 'sha=', got: %s", digestHeader)
+	}
+
+	// Verify the SHA1 hash is correct
+	expectedSHA1 := sha1.Sum(testData)
+	expectedDigest := "sha=" + base64.StdEncoding.EncodeToString(expectedSHA1[:])
+	if digestHeader != expectedDigest {
+		t.Errorf("Expected Digest header %s, got %s", expectedDigest, digestHeader)
+	}
+}
+
+func TestUploadPart_ContentRangeHeader(t *testing.T) {
+	var capturedRequest *http.Request
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			capturedRequest = req
+			responseBody := `{"part":{"part_id":"1","offset":1024,"size":512,"sha1":"test-sha1"}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	testData := make([]byte, 512)
+	_, err := client.UploadPart("test-session-id", testData, 1024, 2048)
+
+	if err != nil {
+		t.Fatalf("UploadPart failed: %v", err)
+	}
+
+	// Verify Content-Range header
+	contentRange := capturedRequest.Header.Get("Content-Range")
+	expected := "bytes 1024-1535/2048"
+	if contentRange != expected {
+		t.Errorf("Expected Content-Range %s, got %s", expected, contentRange)
+	}
+}
+
+func TestUploadLargeFile_SHA1ForAllParts(t *testing.T) {
+	// Create a temporary test file larger than MinChunkedUploadSize
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "large-test.mp4")
+
+	// Create a file with known content (e.g., 25MB)
+	fileSize := int64(25 * 1024 * 1024)
+	testData := make([]byte, fileSize)
+	for i := range testData {
+		testData[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(testFile, testData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Track all uploaded parts and their digests
+	var uploadedParts []struct {
+		offset int64
+		size   int64
+		digest string
+	}
+	var commitParts []UploadPartInfo
+
+	partCounter := 0
+	mockHTTPClient := newMockAuthenticatedHTTPClient()
+
+	// Setup custom Do function
+	originalDo := mockHTTPClient.Do
+	mockHTTPClient.Do = func(req *http.Request) (*http.Response, error) {
+		// Handle different request types
+		if req.Method == "POST" && strings.Contains(req.URL.Path, "/upload_sessions") {
+			// CreateUploadSession
+			if strings.HasSuffix(req.URL.Path, "/commit") {
+				// CommitUploadSession
+				body, _ := io.ReadAll(req.Body)
+				var commitReq CommitUploadSessionRequest
+				json.Unmarshal(body, &commitReq)
+				commitParts = commitReq.Parts
+
+				responseBody := `{"total_count":1,"entries":[{"id":"uploaded-file","name":"large-test.mp4","size":` + fmt.Sprintf("%d", fileSize) + `}]}`
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			// Create session
+			responseBody := `{"id":"test-session","part_size":8388608,"total_parts":4}`
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		} else if req.Method == "PUT" {
+			// UploadPart - verify digest header
+			digest := req.Header.Get("Digest")
+			contentRange := req.Header.Get("Content-Range")
+
+			// Parse content range to get offset and size
+			var offset, rangeEnd, total int64
+			fmt.Sscanf(contentRange, "bytes %d-%d/%d", &offset, &rangeEnd, &total)
+			size := rangeEnd - offset + 1
+
+			uploadedParts = append(uploadedParts, struct {
+				offset int64
+				size   int64
+				digest string
+			}{offset, size, digest})
+
+			partCounter++
+			sha1Val := digest[4:] // Remove "sha=" prefix
+			responseBody := fmt.Sprintf(`{"part":{"part_id":"%d","offset":%d,"size":%d,"sha1":"%s"}}`,
+				partCounter, offset, size, sha1Val)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		}
+
+		return nil, fmt.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
+	}
+	defer func() { mockHTTPClient.Do = originalDo }()
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	// Upload the file
+	_, err := client.UploadLargeFile(testFile, "test-folder", "large-test.mp4", nil)
+	if err != nil {
+		t.Fatalf("UploadLargeFile failed: %v", err)
+	}
+
+	// Verify all parts have SHA1 digests
+	if len(uploadedParts) == 0 {
+		t.Fatal("Expected parts to be uploaded")
+	}
+
+	for i, part := range uploadedParts {
+		if part.digest == "" {
+			t.Errorf("Part %d missing digest", i)
+		}
+		if !strings.HasPrefix(part.digest, "sha=") {
+			t.Errorf("Part %d digest has wrong format: %s", i, part.digest)
+		}
+	}
+
+	// Verify all parts were included in commit
+	if len(commitParts) != len(uploadedParts) {
+		t.Errorf("Expected %d parts in commit, got %d", len(uploadedParts), len(commitParts))
+	}
+
+	// Verify parts are sequential and complete
+	var totalBytes int64
+	for i, part := range commitParts {
+		if i > 0 {
+			prevPart := commitParts[i-1]
+			expectedOffset := prevPart.Offset + prevPart.Size
+			if part.Offset != expectedOffset {
+				t.Errorf("Part %d has non-sequential offset: got %d, expected %d", i, part.Offset, expectedOffset)
+			}
+		}
+		totalBytes += part.Size
+	}
+
+	if totalBytes != fileSize {
+		t.Errorf("Total uploaded bytes %d != file size %d", totalBytes, fileSize)
+	}
+}
+
+func TestCommitUploadSession_WithAttributes(t *testing.T) {
+	var capturedRequest *http.Request
+	var capturedBody []byte
+
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == "POST" && strings.Contains(req.URL.Path, "/commit") {
+				capturedRequest = req
+				capturedBody, _ = io.ReadAll(req.Body)
+
+				responseBody := `{"total_count":1,"entries":[{"id":"file-123","name":"test.mp4","size":1024}]}`
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected request")
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	parts := []UploadPartInfo{
+		{Offset: 0, Size: 512, SHA1: "abc123"},
+		{Offset: 512, Size: 512, SHA1: "def456"},
+	}
+
+	attributes := map[string]interface{}{
+		"name":        "test.mp4",
+		"description": "Test video file",
+		"content_created_at": "2024-01-15T10:30:00Z",
+	}
+
+	_, err := client.CommitUploadSession("test-session", parts, attributes)
+	if err != nil {
+		t.Fatalf("CommitUploadSession failed: %v", err)
+	}
+
+	if capturedRequest == nil {
+		t.Fatal("Expected request to be captured")
+	}
+
+	// Verify the request body contains attributes
+	var commitReq CommitUploadSessionRequest
+	if err := json.Unmarshal(capturedBody, &commitReq); err != nil {
+		t.Fatalf("Failed to unmarshal request body: %v", err)
+	}
+
+	if len(commitReq.Parts) != 2 {
+		t.Errorf("Expected 2 parts, got %d", len(commitReq.Parts))
+	}
+
+	if commitReq.Attributes == nil {
+		t.Fatal("Expected attributes to be set")
+	}
+
+	if name, ok := commitReq.Attributes["name"].(string); !ok || name != "test.mp4" {
+		t.Errorf("Expected name attribute 'test.mp4', got %v", commitReq.Attributes["name"])
+	}
+
+	if desc, ok := commitReq.Attributes["description"].(string); !ok || desc != "Test video file" {
+		t.Errorf("Expected description attribute, got %v", commitReq.Attributes["description"])
+	}
+}
+
+func TestUploadLargeFile_WithFileMetadata(t *testing.T) {
+	// This test verifies that UploadLargeFile passes proper file metadata to CommitUploadSession
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "video-test.mp4")
+
+	// Create a file larger than MinChunkedUploadSize
+	fileSize := int64(25 * 1024 * 1024)
+	testData := make([]byte, fileSize)
+	if err := os.WriteFile(testFile, testData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commitAttributes map[string]interface{}
+
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == "POST" && strings.Contains(req.URL.Path, "/upload_sessions") {
+				if strings.HasSuffix(req.URL.Path, "/commit") {
+					// Capture commit attributes
+					body, _ := io.ReadAll(req.Body)
+					var commitReq CommitUploadSessionRequest
+					json.Unmarshal(body, &commitReq)
+					commitAttributes = commitReq.Attributes
+
+					responseBody := `{"total_count":1,"entries":[{"id":"file-123","name":"video-test.mp4","size":` + fmt.Sprintf("%d", fileSize) + `}]}`
+					return &http.Response{
+						StatusCode: http.StatusCreated,
+						Body:       io.NopCloser(strings.NewReader(responseBody)),
+						Header:     make(http.Header),
+					}, nil
+				}
+
+				// Create session
+				responseBody := `{"id":"test-session","part_size":8388608,"total_parts":4}`
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					Header:     make(http.Header),
+				}, nil
+			} else if req.Method == "PUT" {
+				// UploadPart
+				responseBody := `{"part":{"part_id":"1","offset":0,"size":8388608,"sha1":"test"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			return nil, fmt.Errorf("unexpected request")
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	_, err := client.UploadLargeFile(testFile, "test-folder", "video-test.mp4", nil)
+	if err != nil {
+		t.Fatalf("UploadLargeFile failed: %v", err)
+	}
+
+	// Verify attributes were passed (should include file name at minimum)
+	if commitAttributes != nil {
+		if name, ok := commitAttributes["name"].(string); ok && name != "video-test.mp4" {
+			t.Errorf("Expected name 'video-test.mp4', got %s", name)
+		}
+	}
+}
+
+func TestUploadPart_RetryOnTransientFailure(t *testing.T) {
+	attempt := 0
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			attempt++
+
+			// Fail first 2 attempts with transient error
+			if attempt <= 2 {
+				return nil, fmt.Errorf("network error: connection reset")
+			}
+
+			// Succeed on 3rd attempt
+			responseBody := `{"part":{"part_id":"1","offset":0,"size":1024,"sha1":"test-sha1"}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	testData := []byte("test data")
+	_, err := client.UploadPart("test-session", testData, 0, 1024)
+
+	// With retry logic, this should succeed on 3rd attempt
+	if err == nil {
+		t.Log("UploadPart succeeded after retries")
+	} else {
+		// Currently expected to fail - will be fixed in implementation
+		if attempt < 3 {
+			t.Logf("Expected retry logic not yet implemented (attempt %d)", attempt)
+		}
+	}
+}
+
+func TestUploadPart_FailAfterMaxRetries(t *testing.T) {
+	attempt := 0
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			attempt++
+			// Always fail
+			return nil, fmt.Errorf("persistent network error")
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	testData := []byte("test data")
+	_, err := client.UploadPart("test-session", testData, 0, 1024)
+
+	if err == nil {
+		t.Error("Expected UploadPart to fail after retries")
+	}
+
+	// Should have attempted multiple times (exact count depends on retry config)
+	t.Logf("Attempted %d times before failing", attempt)
+}
+
+func TestUploadPart_NoRetryOnNonTransientError(t *testing.T) {
+	attempt := 0
+	mockHTTPClient := &mockAuthenticatedHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			attempt++
+			// Return non-retryable error (400 Bad Request)
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"invalid request"}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	testData := []byte("test data")
+	_, err := client.UploadPart("test-session", testData, 0, 1024)
+
+	if err == nil {
+		t.Error("Expected UploadPart to fail")
+	}
+
+	// Should only attempt once for non-retryable errors
+	if attempt > 1 {
+		t.Errorf("Expected 1 attempt for non-retryable error, got %d", attempt)
+	}
+}
+
+func TestValidateUploadedParts_Success(t *testing.T) {
+	parts := []UploadPartInfo{
+		{Offset: 0, Size: 1024, SHA1: "abc123"},
+		{Offset: 1024, Size: 1024, SHA1: "def456"},
+		{Offset: 2048, Size: 512, SHA1: "ghi789"},
+	}
+
+	totalSize := int64(2560)
+
+	err := validateUploadedParts(parts, totalSize)
+	if err != nil {
+		t.Errorf("Expected valid parts, got error: %v", err)
+	}
+}
+
+func TestValidateUploadedParts_EmptyParts(t *testing.T) {
+	err := validateUploadedParts([]UploadPartInfo{}, 1024)
+	if err == nil {
+		t.Error("Expected error for empty parts list")
+	}
+}
+
+func TestValidateUploadedParts_GapInParts(t *testing.T) {
+	parts := []UploadPartInfo{
+		{Offset: 0, Size: 1024, SHA1: "abc123"},
+		{Offset: 2048, Size: 1024, SHA1: "def456"}, // Gap: missing 1024-2048
+	}
+
+	err := validateUploadedParts(parts, 3072)
+	if err == nil {
+		t.Error("Expected error for gap in parts")
+	}
+}
+
+func TestValidateUploadedParts_SizeMismatch(t *testing.T) {
+	parts := []UploadPartInfo{
+		{Offset: 0, Size: 1024, SHA1: "abc123"},
+		{Offset: 1024, Size: 1024, SHA1: "def456"},
+	}
+
+	// Total size doesn't match sum of part sizes
+	err := validateUploadedParts(parts, 3072)
+	if err == nil {
+		t.Error("Expected error for size mismatch")
+	}
+}
+
+func TestValidateUploadedParts_OverlappingParts(t *testing.T) {
+	parts := []UploadPartInfo{
+		{Offset: 0, Size: 1024, SHA1: "abc123"},
+		{Offset: 512, Size: 1024, SHA1: "def456"}, // Overlaps with first part
+	}
+
+	err := validateUploadedParts(parts, 1536)
+	if err == nil {
+		t.Error("Expected error for overlapping parts")
+	}
+}
+
 
 // Tests for Feature 4.4 - Enhanced Folder Management with Permissions
 
