@@ -353,6 +353,9 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 				meetingTime.Day())
 
 			// Get the folder (don't create it - just check if file exists)
+			if logger != nil {
+				logger.InfoWithContext(ctx, fmt.Sprintf("Processing: %s (checking if exists in Box)", filename))
+			}
 			folder, err := box.CreateFolderPath(boxClient, folderPath, zoomFolder.ID)
 			if err == nil && folder != nil {
 				// Check if file exists in this folder
