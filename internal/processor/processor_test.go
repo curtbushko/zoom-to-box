@@ -59,17 +59,22 @@ func (m *mockZoomClient) GetOAuthAccessToken(ctx context.Context) (string, error
 }
 
 type mockDownloadManager struct {
-	downloadResults map[string]*download.DownloadResult
-	downloadError   error
+	downloadResults   map[string]*download.DownloadResult
+	downloadError     error
+	downloadAttempted []string // Track which files were attempted to download
 }
 
 func newMockDownloadManager() *mockDownloadManager {
 	return &mockDownloadManager{
-		downloadResults: make(map[string]*download.DownloadResult),
+		downloadResults:   make(map[string]*download.DownloadResult),
+		downloadAttempted: make([]string, 0),
 	}
 }
 
 func (m *mockDownloadManager) Download(ctx context.Context, req download.DownloadRequest, progressCallback download.ProgressCallback) (*download.DownloadResult, error) {
+	// Track that download was attempted
+	m.downloadAttempted = append(m.downloadAttempted, req.Destination)
+
 	if m.downloadError != nil {
 		return nil, m.downloadError
 	}
@@ -798,4 +803,187 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestUserProcessor_SkipDownloadIfFileExistsInBox verifies that when Box is enabled
+// and a file already exists in Box, we skip the download from Zoom entirely
+func TestUserProcessor_SkipDownloadIfFileExistsInBox(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create mock clients
+	zoomClient := newMockZoomClient()
+	downloadManager := newMockDownloadManager()
+	boxClient := newMockBoxClient()
+	boxUploadManager := newMockUploadManager(boxClient)
+
+	// Add test recording
+	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	zoomClient.recordings["john.doe@example.com"] = []*zoom.Recording{
+		{
+			UUID:      "test-uuid-123",
+			Topic:     "Test Meeting",
+			StartTime: testTime,
+			RecordingFiles: []zoom.RecordingFile{
+				{
+					ID:          "file-123",
+					FileType:    "MP4",
+					DownloadURL: "https://zoom.us/download/test.mp4",
+					FileSize:    1024000,
+				},
+			},
+			DownloadAccessToken: "test-token",
+		},
+	}
+
+	// Mark the file as already existing in Box
+	// The file will be in folder: zoom-folder-john.doe@example.com/2024/01/15/
+	// Filename will be: test-meeting-1030.mp4 (topic + HHMM format + extension)
+	expectedFolderID := "folder_15" // Based on how CreateFolderPath works in mock
+	expectedFileName := "test-meeting-1030.mp4"
+	boxClient.existingFiles[expectedFolderID+"/"+expectedFileName] = true
+
+	// Create user processor with Box enabled
+	config := ProcessorConfig{
+		BaseDownloadDir:   tmpDir,
+		BoxEnabled:        true,
+		DeleteAfterUpload: false,
+		ContinueOnError:   false,
+	}
+
+	userManager, _ := users.NewActiveUserManager(users.ActiveUserConfig{
+		FilePath:      "",
+		CaseSensitive: false,
+		WatchFile:     false,
+	})
+
+	dirManager := directory.NewDirectoryManager(directory.DirectoryConfig{
+		BaseDirectory: tmpDir,
+		CreateDirs:    true,
+	}, userManager)
+
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+
+	processor := NewUserProcessor(
+		zoomClient,
+		downloadManager,
+		dirManager,
+		filenameSanitizer,
+		boxUploadManager,
+		config,
+	)
+
+	// Process user
+	ctx := context.Background()
+	result, err := processor.ProcessUser(ctx, "john.doe@example.com", "john.doe@example.com")
+
+	if err != nil {
+		t.Fatalf("ProcessUser failed: %v", err)
+	}
+
+	// VERIFY: Download should NOT have been attempted since file exists in Box
+	if len(downloadManager.downloadAttempted) > 0 {
+		t.Errorf("Expected NO downloads (file exists in Box), but got %d downloads: %v",
+			len(downloadManager.downloadAttempted), downloadManager.downloadAttempted)
+	}
+
+	// VERIFY: File should be marked as skipped
+	if result.SkippedCount != 1 {
+		t.Errorf("Expected 1 skipped file, got %d", result.SkippedCount)
+	}
+
+	// VERIFY: No downloads or uploads should have occurred
+	if result.DownloadedCount != 0 {
+		t.Errorf("Expected 0 downloads, got %d", result.DownloadedCount)
+	}
+	if result.UploadedCount != 0 {
+		t.Errorf("Expected 0 uploads, got %d", result.UploadedCount)
+	}
+}
+
+// TestUserProcessor_DownloadIfFileNotInBox verifies that when Box is enabled
+// and a file does NOT exist in Box, we proceed with download and upload
+func TestUserProcessor_DownloadIfFileNotInBox(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create mock clients
+	zoomClient := newMockZoomClient()
+	downloadManager := newMockDownloadManager()
+	boxClient := newMockBoxClient()
+	boxUploadManager := newMockUploadManager(boxClient)
+
+	// Add test recording
+	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	zoomClient.recordings["jane.smith@example.com"] = []*zoom.Recording{
+		{
+			UUID:      "test-uuid-456",
+			Topic:     "New Meeting",
+			StartTime: testTime,
+			RecordingFiles: []zoom.RecordingFile{
+				{
+					ID:          "file-456",
+					FileType:    "MP4",
+					DownloadURL: "https://zoom.us/download/new.mp4",
+					FileSize:    2048000,
+				},
+			},
+			DownloadAccessToken: "test-token",
+		},
+	}
+
+	// File does NOT exist in Box (don't mark it in existingFiles)
+
+	// Create user processor with Box enabled
+	config := ProcessorConfig{
+		BaseDownloadDir:   tmpDir,
+		BoxEnabled:        true,
+		DeleteAfterUpload: false,
+		ContinueOnError:   false,
+	}
+
+	userManager, _ := users.NewActiveUserManager(users.ActiveUserConfig{
+		FilePath:      "",
+		CaseSensitive: false,
+		WatchFile:     false,
+	})
+
+	dirManager := directory.NewDirectoryManager(directory.DirectoryConfig{
+		BaseDirectory: tmpDir,
+		CreateDirs:    true,
+	}, userManager)
+
+	filenameSanitizer := filename.NewFileSanitizer(filename.FileSanitizerOptions{})
+
+	processor := NewUserProcessor(
+		zoomClient,
+		downloadManager,
+		dirManager,
+		filenameSanitizer,
+		boxUploadManager,
+		config,
+	)
+
+	// Process user
+	ctx := context.Background()
+	result, err := processor.ProcessUser(ctx, "jane.smith@example.com", "jane.smith@example.com")
+
+	if err != nil {
+		t.Fatalf("ProcessUser failed: %v", err)
+	}
+
+	// VERIFY: Download SHOULD have been attempted since file doesn't exist in Box
+	if len(downloadManager.downloadAttempted) != 1 {
+		t.Errorf("Expected 1 download attempt (file not in Box), but got %d",
+			len(downloadManager.downloadAttempted))
+	}
+
+	// VERIFY: File should be downloaded and uploaded
+	if result.DownloadedCount != 1 {
+		t.Errorf("Expected 1 download, got %d", result.DownloadedCount)
+	}
+	if result.UploadedCount != 1 {
+		t.Errorf("Expected 1 upload, got %d", result.UploadedCount)
+	}
+	if result.SkippedCount != 0 {
+		t.Errorf("Expected 0 skipped files, got %d", result.SkippedCount)
+	}
 }

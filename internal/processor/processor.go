@@ -339,6 +339,36 @@ func (p *userProcessorImpl) processRecordingFile(ctx context.Context, zoomEmail,
 		return result
 	}
 
+	// Check if file already exists in Box BEFORE downloading from Zoom
+	if p.config.BoxEnabled && p.boxUploadManager != nil {
+		boxClient := p.boxUploadManager.GetBoxClient()
+
+		// Find the user's zoom folder
+		zoomFolder, err := boxClient.FindZoomFolderByOwner(boxEmail)
+		if err == nil && zoomFolder != nil {
+			// Create folder path for this recording
+			folderPath := fmt.Sprintf("%04d/%02d/%02d",
+				meetingTime.Year(),
+				int(meetingTime.Month()),
+				meetingTime.Day())
+
+			// Get the folder (don't create it - just check if file exists)
+			folder, err := box.CreateFolderPath(boxClient, folderPath, zoomFolder.ID)
+			if err == nil && folder != nil {
+				// Check if file exists in this folder
+				existingFile, err := boxClient.FindFileByName(folder.ID, filename)
+				if err == nil && existingFile != nil {
+					// File already exists in Box - skip download entirely
+					if logger != nil {
+						logger.InfoWithContext(ctx, fmt.Sprintf("Skipped (already exists in Box): %s", filename))
+					}
+					result.Skipped = true
+					return result
+				}
+			}
+		}
+	}
+
 	// Skip if meta-only mode and this is not a metadata file
 	if p.config.MetaOnly && recordingFile.FileType == "MP4" {
 		if p.config.Verbose && logger != nil {

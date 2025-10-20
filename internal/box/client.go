@@ -1419,9 +1419,8 @@ func (c *boxClient) UploadLargeFile(filePath string, parentFolderID string, file
 	}
 
 	// Prepare file attributes for commit
-	attributes := map[string]interface{}{
-		"name": fileName,
-	}
+	// Note: "name" is not allowed in attributes - it was already set during CreateUploadSession
+	attributes := map[string]interface{}{}
 
 	// Commit the upload session with file metadata and digest
 	uploadedFile, err := c.CommitUploadSession(session.ID, uploadedParts, attributes, fileSHA1)
