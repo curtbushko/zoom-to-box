@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/curtbushko/zoom-to-box/internal/logging"
 )
 
 type boxClient struct {
@@ -481,10 +483,15 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 	offset := 0
 	limit := 1000
 
+	logging.Info("Searching for zoom folder for owner: %s", ownerEmail)
+
 	// Paginate through all items in the root folder
 	for {
 		// List root folder items with owned_by field
 		apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by&limit=%d&offset=%d", BoxAPIBaseURL, limit, offset)
+
+		logging.Debug("Fetching Box root folder items - offset: %d, limit: %d", offset, limit)
+
 		resp, err := c.httpClient.Get(context.Background(), apiURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list root folder items: %w", err)
@@ -501,13 +508,21 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 			return nil, fmt.Errorf("failed to decode folder items response: %w", err)
 		}
 
+		logging.Debug("Retrieved %d items from Box root folder (offset: %d)", len(items.Entries), offset)
+
 		// Search for zoom folder owned by the specified user (case-insensitive)
 		for _, item := range items.Entries {
 			if item.Type == ItemTypeFolder && item.Name == "zoom" {
 				// Check if owner matches
 				if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
 					// Get full folder information
-					return c.GetFolder(item.ID)
+					folder, err := c.GetFolder(item.ID)
+					if err != nil {
+						return nil, err
+					}
+
+					logging.Info("Found zoom folder for %s - folder ID: %s", ownerEmail, folder.ID)
+					return folder, nil
 				}
 			}
 		}
@@ -515,11 +530,13 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 		// Check if there are more items to fetch
 		if len(items.Entries) < limit {
 			// No more items to fetch
+			logging.Debug("Reached end of Box root folder items (total pages checked: %d)", (offset/limit)+1)
 			break
 		}
 
 		// Move to next page
 		offset += limit
+		logging.Debug("Moving to next page of Box root folder items")
 	}
 
 	// Zoom folder not found for this owner
