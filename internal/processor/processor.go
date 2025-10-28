@@ -602,11 +602,7 @@ func (p *userProcessorImpl) uploadToBoxWithoutTracking(ctx context.Context, loca
 	}
 
 	// File doesn't exist - proceed with upload (without tracking - tracking done by caller)
-	// Upload directly to the folder we already created (folder.ID)
-	uploadProgressCallback := func(uploaded, total int64) {
-		// Progress callback if needed
-	}
-	uploadedFile, err := boxClient.UploadFileWithProgress(localPath, folder.ID, baseFileName, uploadProgressCallback)
+	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMapping(ctx, localPath, zoomEmail, boxEmail, fmt.Sprintf("upload-%s", baseFileName), nil)
 	if err != nil {
 		result.Error = fmt.Errorf("Box upload failed for %s: %w", baseFileName, err)
 		if logger != nil {
@@ -617,7 +613,7 @@ func (p *userProcessorImpl) uploadToBoxWithoutTracking(ctx context.Context, loca
 
 	result.Uploaded = true
 	if logger != nil {
-		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadedFile.ID))
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadResult.FileID))
 	}
 
 	return result, nil
@@ -685,11 +681,8 @@ func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail
 	}
 
 	// File doesn't exist - proceed with upload
-	// Upload directly to the folder we already created (folder.ID)
-	uploadProgressCallback := func(uploaded, total int64) {
-		// Progress callback if needed
-	}
-	uploadedFile, err := boxClient.UploadFileWithProgress(localPath, folder.ID, baseFileName, uploadProgressCallback)
+	// The upload manager will use the baseFolderID (zoomFolder.ID) we set above
+	uploadResult, err := p.boxUploadManager.UploadFileWithEmailMappingWithTime(ctx, localPath, zoomEmail, boxEmail, fmt.Sprintf("upload-%s", baseFileName), nil, processingTime, zoomEmail, fileSize)
 	if err != nil {
 		result.Error = fmt.Errorf("Box upload failed for %s: %w", baseFileName, err)
 		if logger != nil {
@@ -698,12 +691,9 @@ func (p *userProcessorImpl) uploadToBox(ctx context.Context, localPath, boxEmail
 		return result, result.Error
 	}
 
-	// Track the upload with processing time
-	p.boxUploadManager.TrackUploadWithTime(zoomEmail, fileName, uploadedFile.Size, time.Now(), processingTime)
-
 	result.Uploaded = true
 	if logger != nil {
-		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadedFile.ID))
+		logger.InfoWithContext(ctx, fmt.Sprintf("Uploaded to Box: %s (file ID: %s)", baseFileName, uploadResult.FileID))
 	}
 
 	return result, nil
