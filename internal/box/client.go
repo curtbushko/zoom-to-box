@@ -471,39 +471,55 @@ func (c *boxClient) FindFileByName(folderID string, name string) (*File, error) 
 // FindZoomFolderByOwner finds the "zoom" folder owned by a specific user
 // Searches the root directory for zoom folders and matches by owner email
 // Returns the full folder information if found, or a BoxError if not found
+// Supports pagination to handle cases where there are more than 1000 items in root
 func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 	if strings.TrimSpace(ownerEmail) == "" {
 		return nil, fmt.Errorf("owner email cannot be empty")
 	}
 
-	// List root folder items with owned_by field
-	apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by&limit=1000", BoxAPIBaseURL)
-	resp, err := c.httpClient.Get(context.Background(), apiURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list root folder items: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list root folder items, status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var items FolderItems
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return nil, fmt.Errorf("failed to decode folder items response: %w", err)
-	}
-
-	// Search for zoom folder owned by the specified user (case-insensitive)
 	ownerEmailLower := strings.ToLower(ownerEmail)
-	for _, item := range items.Entries {
-		if item.Type == ItemTypeFolder && item.Name == "zoom" {
-			// Check if owner matches
-			if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
-				// Get full folder information
-				return c.GetFolder(item.ID)
+	offset := 0
+	limit := 1000
+
+	// Paginate through all items in the root folder
+	for {
+		// List root folder items with owned_by field
+		apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by&limit=%d&offset=%d", BoxAPIBaseURL, limit, offset)
+		resp, err := c.httpClient.Get(context.Background(), apiURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list root folder items: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("failed to list root folder items, status: %d, body: %s", resp.StatusCode, string(body))
+		}
+
+		var items FolderItems
+		if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+			return nil, fmt.Errorf("failed to decode folder items response: %w", err)
+		}
+
+		// Search for zoom folder owned by the specified user (case-insensitive)
+		for _, item := range items.Entries {
+			if item.Type == ItemTypeFolder && item.Name == "zoom" {
+				// Check if owner matches
+				if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
+					// Get full folder information
+					return c.GetFolder(item.ID)
+				}
 			}
 		}
+
+		// Check if there are more items to fetch
+		if len(items.Entries) < limit {
+			// No more items to fetch
+			break
+		}
+
+		// Move to next page
+		offset += limit
 	}
 
 	// Zoom folder not found for this owner

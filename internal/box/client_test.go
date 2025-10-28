@@ -527,6 +527,53 @@ func TestBoxClient_FindZoomFolderByOwner(t *testing.T) {
 			expectedError: true,
 			errorContains: "zoom folder not found for owner 'john.doe@company.com'",
 		},
+		{
+			name:       "positive - zoom folder found on second page of results",
+			ownerEmail: "john.doe@company.com",
+			setupMock: func(m *mockAuthenticatedHTTPClient) {
+				// First page - 1000 items, no match
+				m.setResponse("GET", BoxAPIBaseURL+"/folders/0/items?fields=id,name,type,owned_by&limit=1000&offset=0",
+					http.StatusOK,
+					`{
+						"total_count": 1500,
+						"entries": [
+							{"id": "111", "type": "folder", "name": "documents"},
+							{"id": "222", "type": "folder", "name": "zoom", "owned_by": {"id": "1001", "login": "jane.smith@company.com"}}
+						],
+						"offset": 0,
+						"limit": 1000
+					}`)
+				// Second page - zoom folder found
+				m.setResponse("GET", BoxAPIBaseURL+"/folders/0/items?fields=id,name,type,owned_by&limit=1000&offset=1000",
+					http.StatusOK,
+					`{
+						"total_count": 1500,
+						"entries": [
+							{"id": "333", "type": "folder", "name": "zoom", "owned_by": {"id": "1002", "login": "john.doe@company.com"}}
+						],
+						"offset": 1000,
+						"limit": 1000
+					}`)
+				m.setResponse("GET", BoxAPIBaseURL+"/folders/333",
+					http.StatusOK,
+					`{
+						"id": "333",
+						"type": "folder",
+						"name": "zoom",
+						"owned_by": {"id": "1002", "login": "john.doe@company.com"}
+					}`)
+			},
+			expectedFolder: &Folder{
+				ID:   "333",
+				Type: "folder",
+				Name: "zoom",
+				OwnedBy: &User{
+					ID:    "1002",
+					Login: "john.doe@company.com",
+				},
+			},
+			expectedError: false,
+		},
 	}
 
 	for _, tt := range tests {
