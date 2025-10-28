@@ -844,6 +844,7 @@ func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Fo
 
 	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
 	currentParentID := parentID
+	var lastFolder *Folder
 
 	for _, part := range parts {
 		if part == "" {
@@ -865,16 +866,22 @@ func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Fo
 
 		if found != nil {
 			currentParentID = found.ID
+			// Get full folder info for found folder
+			lastFolder, err = client.GetFolder(found.ID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get folder %s: %w", found.ID, err)
+			}
 		} else {
 			folder, err := client.CreateFolder(part, currentParentID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create folder '%s' in parent %s: %w", part, currentParentID, err)
 			}
 			currentParentID = folder.ID
+			lastFolder = folder
 		}
 	}
 
-	return client.GetFolder(currentParentID)
+	return lastFolder, nil
 }
 
 // CreateFolderPathAsUser creates a folder path as a specific user using As-User header
