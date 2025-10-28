@@ -1031,6 +1031,15 @@ func (c *boxClient) CreateUploadSession(fileName string, folderID string, fileSi
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &BoxError{
+			StatusCode: resp.StatusCode,
+			Code:       ErrorCodeItemNotFound,
+			Message:    fmt.Sprintf("folder with ID '%s' not found", folderID),
+			Retryable:  false,
+		}
+	}
+
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to create upload session, status: %d, body: %s", resp.StatusCode, string(body))
