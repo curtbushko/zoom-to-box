@@ -496,19 +496,21 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to list root folder items: %w", err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to list root folder items, status: %d, body: %s", resp.StatusCode, string(body))
 		}
 
 		var items FolderItems
 		if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to decode folder items response: %w", err)
 		}
+		resp.Body.Close()
 
-		logging.Debug("Retrieved %d items from Box root folder (offset: %d)", len(items.Entries), offset)
+		logging.Debug("Retrieved %d items from Box root folder (offset: %d, total_count: %d)", len(items.Entries), offset, items.TotalCount)
 
 		// Search for zoom folder owned by the specified user (case-insensitive)
 		for _, item := range items.Entries {
@@ -528,9 +530,10 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 		}
 
 		// Check if there are more items to fetch
-		if len(items.Entries) < limit {
+		// Stop if: no items returned OR we've fetched all items based on total count
+		if len(items.Entries) == 0 || offset+len(items.Entries) >= items.TotalCount {
 			// No more items to fetch
-			logging.Debug("Reached end of Box root folder items (total pages checked: %d)", (offset/limit)+1)
+			logging.Debug("Reached end of Box root folder items (total pages checked: %d, total items: %d)", (offset/limit)+1, items.TotalCount)
 			break
 		}
 
