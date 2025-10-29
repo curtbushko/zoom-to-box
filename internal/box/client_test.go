@@ -617,6 +617,77 @@ func TestBoxClient_FindZoomFolderByOwner(t *testing.T) {
 	}
 }
 
+// Test that FindZoomFolderByOwner constructs Folder from Item data without calling GetFolder
+// This avoids 404 errors that can occur when GetFolder tries to fetch parent folder info
+func TestBoxClient_FindZoomFolderByOwner_NoGetFolderCall(t *testing.T) {
+	mockHTTPClient := newMockAuthenticatedHTTPClient()
+	client := &boxClient{httpClient: mockHTTPClient}
+
+	// Set up the list items response with a zoom folder
+	listResponse := `{
+		"total_count": 1,
+		"entries": [
+			{
+				"type": "folder",
+				"id": "12345",
+				"name": "zoom",
+				"owned_by": {
+					"type": "user",
+					"id": "67890",
+					"name": "Test User",
+					"login": "test@example.com"
+				}
+			}
+		],
+		"offset": 0,
+		"limit": 1000
+	}`
+
+	mockHTTPClient.setResponse("GET", "https://api.box.com/2.0/folders/0/items?fields=id,name,type,owned_by&limit=1000&offset=0", http.StatusOK, listResponse)
+
+	// Call FindZoomFolderByOwner
+	folder, err := client.FindZoomFolderByOwner("test@example.com")
+
+	// Verify no error
+	if err != nil {
+		t.Fatalf("FindZoomFolderByOwner failed: %v", err)
+	}
+
+	// Verify folder information is correctly populated from Item data
+	if folder == nil {
+		t.Fatal("Expected folder but got nil")
+	}
+
+	if folder.ID != "12345" {
+		t.Errorf("Expected folder ID '12345', got '%s'", folder.ID)
+	}
+
+	if folder.Name != "zoom" {
+		t.Errorf("Expected folder name 'zoom', got '%s'", folder.Name)
+	}
+
+	if folder.Type != "folder" {
+		t.Errorf("Expected folder type 'folder', got '%s'", folder.Type)
+	}
+
+	if folder.OwnedBy == nil {
+		t.Error("Expected OwnedBy to be non-nil")
+	} else if folder.OwnedBy.Login != "test@example.com" {
+		t.Errorf("Expected owner login 'test@example.com', got '%s'", folder.OwnedBy.Login)
+	}
+
+	// Verify that GetFolder was NOT called
+	// The mock client should only have received one request (the list items request)
+	totalRequests := 0
+	for _, responses := range mockHTTPClient.responses {
+		totalRequests += len(responses)
+	}
+
+	if totalRequests != 1 {
+		t.Errorf("Expected exactly 1 HTTP request (list items), but got %d requests", totalRequests)
+	}
+}
+
 func (m *mockAuthenticatedHTTPClient) setResponse(method, url string, statusCode int, responseBody string) {
 	key := fmt.Sprintf("%s %s", method, url)
 	resp := &http.Response{

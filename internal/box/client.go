@@ -422,8 +422,14 @@ func (c *boxClient) FindFolderByName(parentID string, name string) (*Folder, err
 	// Search for the folder by name
 	for _, item := range items.Entries {
 		if item.Type == ItemTypeFolder && item.Name == name {
-			// Get full folder information
-			return c.GetFolder(item.ID)
+			// Construct folder from item data to avoid unnecessary GetFolder call
+			// which can fail with 404 if parent folder information is unavailable
+			return &Folder{
+				ID:      item.ID,
+				Type:    item.Type,
+				Name:    item.Name,
+				OwnedBy: item.OwnedBy,
+			}, nil
 		}
 	}
 
@@ -517,10 +523,13 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 			if item.Type == ItemTypeFolder && item.Name == "zoom" {
 				// Check if owner matches
 				if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
-					// Get full folder information
-					folder, err := c.GetFolder(item.ID)
-					if err != nil {
-						return nil, err
+					// Construct folder from item data to avoid unnecessary GetFolder call
+					// which can fail with 404 if parent folder information is unavailable
+					folder := &Folder{
+						ID:      item.ID,
+						Type:    item.Type,
+						Name:    item.Name,
+						OwnedBy: item.OwnedBy,
 					}
 
 					logging.Info("Found zoom folder for %s - folder ID: %s", ownerEmail, folder.ID)
@@ -902,10 +911,13 @@ func CreateFolderPath(client BoxClient, folderPath string, parentID string) (*Fo
 
 		if found != nil {
 			currentParentID = found.ID
-			// Get full folder info for found folder
-			lastFolder, err = client.GetFolder(found.ID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get folder %s: %w", found.ID, err)
+			// Construct folder from item data to avoid unnecessary GetFolder call
+			// which can fail with 404 if parent folder information is unavailable
+			lastFolder = &Folder{
+				ID:      found.ID,
+				Type:    found.Type,
+				Name:    found.Name,
+				OwnedBy: found.OwnedBy,
 			}
 		} else {
 			folder, err := client.CreateFolder(part, currentParentID)
@@ -926,7 +938,12 @@ func CreateFolderPathAsUser(client BoxClient, folderPath string, parentID string
 		if parentID == "" {
 			parentID = RootFolderID
 		}
-		return client.GetFolder(parentID)
+		// Construct a minimal Folder object instead of calling GetFolder
+		// to avoid 404 errors when folder is inaccessible
+		return &Folder{
+			ID:   parentID,
+			Type: ItemTypeFolder,
+		}, nil
 	}
 
 	if parentID == "" {
@@ -939,6 +956,7 @@ func CreateFolderPathAsUser(client BoxClient, folderPath string, parentID string
 
 	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
 	currentParentID := parentID
+	var lastFolder *Folder
 
 	for _, part := range parts {
 		if part == "" {
@@ -960,16 +978,24 @@ func CreateFolderPathAsUser(client BoxClient, folderPath string, parentID string
 
 		if found != nil {
 			currentParentID = found.ID
+			// Construct folder from item data to avoid unnecessary GetFolder call
+			lastFolder = &Folder{
+				ID:      found.ID,
+				Type:    found.Type,
+				Name:    found.Name,
+				OwnedBy: found.OwnedBy,
+			}
 		} else {
 			folder, err := client.CreateFolderAsUser(part, currentParentID, userID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create folder '%s' in parent %s as user: %w", part, currentParentID, err)
 			}
 			currentParentID = folder.ID
+			lastFolder = folder
 		}
 	}
 
-	return client.GetFolder(currentParentID)
+	return lastFolder, nil
 }
 
 func ValidateFileName(fileName string) error {
@@ -997,7 +1023,12 @@ func FindFolderByPath(client BoxClient, folderPath string, parentID string) (*Fo
 		if parentID == "" {
 			parentID = RootFolderID
 		}
-		return client.GetFolder(parentID)
+		// Construct a minimal Folder object instead of calling GetFolder
+		// to avoid 404 errors when folder is inaccessible
+		return &Folder{
+			ID:   parentID,
+			Type: ItemTypeFolder,
+		}, nil
 	}
 
 	if parentID == "" {
@@ -1006,6 +1037,7 @@ func FindFolderByPath(client BoxClient, folderPath string, parentID string) (*Fo
 
 	parts := strings.Split(strings.Trim(folderPath, "/"), "/")
 	currentParentID := parentID
+	var lastFolder *Folder
 
 	for _, part := range parts {
 		if part == "" {
@@ -1035,9 +1067,16 @@ func FindFolderByPath(client BoxClient, folderPath string, parentID string) (*Fo
 		}
 
 		currentParentID = found.ID
+		// Construct folder from item data to avoid unnecessary GetFolder call
+		lastFolder = &Folder{
+			ID:      found.ID,
+			Type:    found.Type,
+			Name:    found.Name,
+			OwnedBy: found.OwnedBy,
+		}
 	}
 
-	return client.GetFolder(currentParentID)
+	return lastFolder, nil
 }
 
 // ValidateFolderStructure validates that the expected folder structure exists and is accessible
