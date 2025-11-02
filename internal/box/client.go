@@ -494,7 +494,8 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 	// Paginate through all items in the root folder
 	for {
 		// List root folder items with owned_by field
-		apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by&limit=%d&offset=%d", BoxAPIBaseURL, limit, offset)
+		// Note: By default, Box API only returns active items (not trashed)
+		apiURL := fmt.Sprintf("%s/folders/0/items?fields=id,name,type,owned_by,item_status&limit=%d&offset=%d", BoxAPIBaseURL, limit, offset)
 
 		logging.Debug("Fetching Box root folder items - offset: %d, limit: %d", offset, limit)
 
@@ -521,6 +522,20 @@ func (c *boxClient) FindZoomFolderByOwner(ownerEmail string) (*Folder, error) {
 		// Search for zoom folder owned by the specified user (case-insensitive)
 		for _, item := range items.Entries {
 			if item.Type == ItemTypeFolder && item.Name == "zoom" {
+				// Log all zoom folders found for debugging
+				ownerLogin := "<nil>"
+				if item.OwnedBy != nil {
+					ownerLogin = item.OwnedBy.Login
+				}
+				logging.Debug("Found zoom folder: ID=%s, owned_by=%s, item_status=%s (looking for: %s)",
+					item.ID, ownerLogin, item.ItemStatus, ownerEmail)
+
+				// Skip trashed or non-active folders
+				if item.ItemStatus != "" && item.ItemStatus != "active" {
+					logging.Debug("Skipping zoom folder %s - item_status is '%s' (not active)", item.ID, item.ItemStatus)
+					continue
+				}
+
 				// Check if owner matches
 				if item.OwnedBy != nil && strings.ToLower(item.OwnedBy.Login) == ownerEmailLower {
 					// Construct folder from item data to avoid unnecessary GetFolder call

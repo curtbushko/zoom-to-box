@@ -175,6 +175,7 @@ type Item struct {
 	Etag       string `json:"etag"`
 	SequenceID string `json:"sequence_id"`
 	OwnedBy    *User  `json:"owned_by,omitempty"`
+	ItemStatus string `json:"item_status,omitempty"`
 }
 
 // FolderItems represents the response when listing folder contents
