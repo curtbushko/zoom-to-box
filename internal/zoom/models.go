@@ -2,37 +2,77 @@
 package zoom
 
 import (
+	"encoding/json"
 	"time"
 )
 
+// NullableTime is a time.Time that can handle empty strings and null values during JSON unmarshaling
+type NullableTime struct {
+	Time  time.Time
+	Valid bool // Valid is true if Time is not null or empty
+}
+
+// UnmarshalJSON implements json.Unmarshaler to handle empty strings and null values
+func (nt *NullableTime) UnmarshalJSON(data []byte) error {
+	// Handle null
+	if string(data) == "null" {
+		nt.Valid = false
+		return nil
+	}
+
+	// Handle empty string
+	if string(data) == `""` {
+		nt.Valid = false
+		return nil
+	}
+
+	// Try to unmarshal as time.Time
+	var t time.Time
+	if err := json.Unmarshal(data, &t); err != nil {
+		return err
+	}
+
+	nt.Time = t
+	nt.Valid = true
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler
+func (nt NullableTime) MarshalJSON() ([]byte, error) {
+	if !nt.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(nt.Time)
+}
+
 // RecordingFile represents a single recording file within a meeting recording
 type RecordingFile struct {
-	ID             string     `json:"id"`
-	MeetingID      string     `json:"meeting_id"`
-	RecordingStart time.Time  `json:"recording_start"`
-	RecordingEnd   time.Time  `json:"recording_end"`
-	FileType       string     `json:"file_type"`
-	FileExtension  string     `json:"file_extension,omitempty"`
-	FileSize       int64      `json:"file_size"`
-	DownloadURL    string     `json:"download_url"`
-	PlayURL        string     `json:"play_url,omitempty"`
-	Status         string     `json:"status"`
-	FilePath       string     `json:"file_path,omitempty"`
-	RecordingType  string     `json:"recording_type,omitempty"`
-	DeletedTime    *time.Time `json:"deleted_time,omitempty"`
+	ID             string       `json:"id"`
+	MeetingID      string       `json:"meeting_id"`
+	RecordingStart NullableTime `json:"recording_start"`
+	RecordingEnd   NullableTime `json:"recording_end"`
+	FileType       string       `json:"file_type"`
+	FileExtension  string       `json:"file_extension,omitempty"`
+	FileSize       int64        `json:"file_size"`
+	DownloadURL    string       `json:"download_url"`
+	PlayURL        string       `json:"play_url,omitempty"`
+	Status         string       `json:"status"`
+	FilePath       string       `json:"file_path,omitempty"`
+	RecordingType  string       `json:"recording_type,omitempty"`
+	DeletedTime    *time.Time   `json:"deleted_time,omitempty"`
 }
 
 // ParticipantAudioFile represents an individual participant's audio recording
 type ParticipantAudioFile struct {
-	ID             string    `json:"id"`
-	FileName       string    `json:"file_name,omitempty"`
-	FilePath       string    `json:"file_path,omitempty"`
-	FileSize       int64     `json:"file_size"`
-	FileType       string    `json:"file_type"`
-	DownloadURL    string    `json:"download_url"`
-	PlayURL        string    `json:"play_url,omitempty"`
-	RecordingStart time.Time `json:"recording_start"`
-	RecordingEnd   time.Time `json:"recording_end"`
+	ID             string       `json:"id"`
+	FileName       string       `json:"file_name,omitempty"`
+	FilePath       string       `json:"file_path,omitempty"`
+	FileSize       int64        `json:"file_size"`
+	FileType       string       `json:"file_type"`
+	DownloadURL    string       `json:"download_url"`
+	PlayURL        string       `json:"play_url,omitempty"`
+	RecordingStart NullableTime `json:"recording_start"`
+	RecordingEnd   NullableTime `json:"recording_end"`
 }
 
 // Recording represents a meeting or webinar recording with all associated files

@@ -33,8 +33,8 @@ func TestRecordingFileMarshalUnmarshal(t *testing.T) {
 			expected: RecordingFile{
 				ID:             "72576a1f-4e66-4a77-87c4-f13f9808bd76",
 				MeetingID:      "L0AGOEPVR9m5WSOOs/d+FQ==",
-				RecordingStart: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
-				RecordingEnd:   time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
+				RecordingStart: NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
+				RecordingEnd:   NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
 				FileType:       "MP4",
 				FileExtension:  "MP4",
 				FileSize:       7220,
@@ -61,8 +61,8 @@ func TestRecordingFileMarshalUnmarshal(t *testing.T) {
 			expected: RecordingFile{
 				ID:             "72576a1f-4e66-4a77-87c4-f13f9808bd76",
 				MeetingID:      "L0AGOEPVR9m5WSOOs/d+FQ==",
-				RecordingStart: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
-				RecordingEnd:   time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
+				RecordingStart: NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
+				RecordingEnd:   NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
 				FileType:       "MP4",
 				FileSize:       7220,
 				DownloadURL:    "https://example.com/rec/download/Qg75t7xZBtEbAkjdlgbfdngBBBB",
@@ -87,10 +87,12 @@ func TestRecordingFileMarshalUnmarshal(t *testing.T) {
 			if recordingFile.MeetingID != tt.expected.MeetingID {
 				t.Errorf("Expected MeetingID %s, got %s", tt.expected.MeetingID, recordingFile.MeetingID)
 			}
-			if !recordingFile.RecordingStart.Equal(tt.expected.RecordingStart) {
+			if recordingFile.RecordingStart.Valid != tt.expected.RecordingStart.Valid ||
+			   (recordingFile.RecordingStart.Valid && !recordingFile.RecordingStart.Time.Equal(tt.expected.RecordingStart.Time)) {
 				t.Errorf("Expected RecordingStart %v, got %v", tt.expected.RecordingStart, recordingFile.RecordingStart)
 			}
-			if !recordingFile.RecordingEnd.Equal(tt.expected.RecordingEnd) {
+			if recordingFile.RecordingEnd.Valid != tt.expected.RecordingEnd.Valid ||
+			   (recordingFile.RecordingEnd.Valid && !recordingFile.RecordingEnd.Time.Equal(tt.expected.RecordingEnd.Time)) {
 				t.Errorf("Expected RecordingEnd %v, got %v", tt.expected.RecordingEnd, recordingFile.RecordingEnd)
 			}
 			if recordingFile.FileType != tt.expected.FileType {
@@ -172,8 +174,8 @@ func TestRecordingMarshalUnmarshal(t *testing.T) {
 					{
 						ID:             "72576a1f-4e66-4a77-87c4-f13f9808bd76",
 						MeetingID:      "L0AGOEPVR9m5WSOOs/d+FQ==",
-						RecordingStart: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
-						RecordingEnd:   time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC),
+						RecordingStart: NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
+						RecordingEnd:   NullableTime{Time: time.Date(2021, 3, 18, 5, 41, 36, 0, time.UTC), Valid: true},
 						FileType:       "MP4",
 						FileSize:       7220,
 						DownloadURL:    "https://example.com/rec/download/Qg75t7xZBtEbAkjdlgbfdngBBBB",
@@ -374,8 +376,8 @@ func TestParticipantAudioFileMarshalUnmarshal(t *testing.T) {
 				FileType:       "M4A",
 				DownloadURL:    "https://example.com/rec/download/Qg75t7xZBtEbAkjdlgbfdngBBBB",
 				PlayURL:        "https://example.com/rec/play/Qg75t7xZBtEbAkjdlgbfdngBBBB",
-				RecordingStart: time.Date(2021, 6, 30, 22, 12, 35, 0, time.UTC),
-				RecordingEnd:   time.Date(2021, 6, 30, 22, 14, 57, 0, time.UTC),
+				RecordingStart: NullableTime{Time: time.Date(2021, 6, 30, 22, 12, 35, 0, time.UTC), Valid: true},
+				RecordingEnd:   NullableTime{Time: time.Date(2021, 6, 30, 22, 14, 57, 0, time.UTC), Valid: true},
 			},
 		},
 	}
@@ -611,6 +613,32 @@ func TestHandleNullAndEmptyFields(t *testing.T) {
 				"status": "completed",
 				"file_path": "",
 				"play_url": ""
+			}`,
+		},
+		{
+			name: "empty string time fields",
+			jsonData: `{
+				"id": "72576a1f-4e66-4a77-87c4-f13f9808bd76",
+				"meeting_id": "L0AGOEPVR9m5WSOOs/d+FQ==",
+				"recording_start": "",
+				"recording_end": "",
+				"file_type": "MP4",
+				"file_size": 7220,
+				"download_url": "https://example.com/rec/download/Qg75t7xZBtEbAkjdlgbfdngBBBB",
+				"status": "completed"
+			}`,
+		},
+		{
+			name: "null time fields",
+			jsonData: `{
+				"id": "72576a1f-4e66-4a77-87c4-f13f9808bd76",
+				"meeting_id": "L0AGOEPVR9m5WSOOs/d+FQ==",
+				"recording_start": null,
+				"recording_end": null,
+				"file_type": "MP4",
+				"file_size": 7220,
+				"download_url": "https://example.com/rec/download/Qg75t7xZBtEbAkjdlgbfdngBBBB",
+				"status": "completed"
 			}`,
 		},
 	}
