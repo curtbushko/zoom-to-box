@@ -179,11 +179,7 @@ OUTPUT_FILE="active_users.txt"
 
 # Initialize output file with header
 {
-    echo "=========================================="
-    echo "Active Users and Recording Counts"
-    echo "=========================================="
-    printf "%-40s %-40s %s\n" "Email" "Name" "Recordings (last 30 days)"
-    echo "=========================================="
+    echo "Email,Name,Recordings (last 30 days)"
 } | tee "$OUTPUT_FILE"
 
 # Get recording count for each user
@@ -195,9 +191,10 @@ for i in "${!user_ids[@]}"; do
     log "Fetching recording count for: $user_email"
     recording_count=$(get_recording_count "$user_id" "$user_email")
 
-    # Print user info and recording count (both to stdout and file)
-    printf "%-40s %-40s %s\n" "$user_email" "$user_name" "$recording_count" | tee -a "$OUTPUT_FILE"
+    # Only add users with recordings to the output
+    if [[ "$recording_count" -gt 0 ]]; then
+        # Print user info and recording count as CSV (both to stdout and file)
+        echo "$user_email,$user_name,$recording_count" | tee -a "$OUTPUT_FILE"
+    fi
 done
-
-echo "==========================================" | tee -a "$OUTPUT_FILE"
 log "Done! Results saved to $OUTPUT_FILE"
