@@ -90,33 +90,46 @@ get_recording_count() {
     local user_id="$1"
     local user_email="$2"
 
-    # Get recordings from the last 30 days
-    # Compatible with both macOS (BSD date) and Linux (GNU date)
-    if date -v-30d >/dev/null 2>&1; then
-        # macOS/BSD date
-        local from_date=$(date -v-30d '+%Y-%m-%d')
-    else
-        # Linux/GNU date
-        local from_date=$(date -d '30 days ago' '+%Y-%m-%d')
-    fi
-    local to_date=$(date '+%Y-%m-%d')
+    # Zoom API only supports max 30-day ranges, so we need to split 90 days into 3 chunks
+    local total_count=0
 
-    # Query recordings for this user
-    local recordings_response=$(curl -s -X GET \
-        "${ZOOM_BASE_URL}/users/${user_id}/recordings?from=${from_date}&to=${to_date}&page_size=300" \
-        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-        -H "Content-Type: application/json")
+    # Loop through three 30-day periods (90 days total)
+    for period in 0 1 2; do
+        local days_back_start=$((period * 30 + 30))
+        local days_back_end=$((period * 30))
 
-    # Extract total_records from the response
-    # The Zoom API returns a total_records field that indicates the total number of recordings
-    local total_records=$(echo "$recordings_response" | grep -o '"total_records":[0-9]*' | cut -d':' -f2)
+        # Get recordings from each 30-day period
+        # Compatible with both macOS (BSD date) and Linux (GNU date)
+        if date -v-${days_back_start}d >/dev/null 2>&1; then
+            # macOS/BSD date
+            local from_date=$(date -v-${days_back_start}d '+%Y-%m-%d')
+            local to_date=$(date -v-${days_back_end}d '+%Y-%m-%d')
+        else
+            # Linux/GNU date
+            local from_date=$(date -d "${days_back_start} days ago" '+%Y-%m-%d')
+            local to_date=$(date -d "${days_back_end} days ago" '+%Y-%m-%d')
+        fi
 
-    # If grep didn't find total_records, default to 0
-    if [[ -z "$total_records" ]]; then
-        total_records=0
-    fi
+        # Query recordings for this user in this period
+        local recordings_response=$(curl -s -X GET \
+            "${ZOOM_BASE_URL}/users/${user_id}/recordings?from=${from_date}&to=${to_date}&page_size=300" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/json")
 
-    echo "$total_records"
+        # Extract total_records from the response
+        # The Zoom API returns a total_records field that indicates the total number of recordings
+        local period_records=$(echo "$recordings_response" | grep -o '"total_records":[0-9]*' | cut -d':' -f2)
+
+        # If grep didn't find total_records, default to 0
+        if [[ -z "$period_records" ]]; then
+            period_records=0
+        fi
+
+        # Add to running total
+        total_count=$((total_count + period_records))
+    done
+
+    echo "$total_count"
 }
 
 # List all active users
@@ -179,7 +192,7 @@ OUTPUT_FILE="active_users.txt"
 
 # Initialize output file with header
 {
-    echo "Email,Name,Recordings (last 30 days)"
+    echo "Email,Name,Recordings (last 90 days)"
 } | tee "$OUTPUT_FILE"
 
 # Get recording count for each user
