@@ -142,20 +142,10 @@ while [[ "$has_more_pages" == "true" ]]; do
         -H "Content-Type: application/json")
 
     # Extract user information from this page
-    # Using python3 to parse JSON if available, otherwise use grep/sed
-    if command -v python3 >/dev/null 2>&1; then
-        # Use python to extract user data
-        page_users=$(echo "$USERS_RESPONSE" | python3 -c '
-import sys
-import json
-try:
-    data = json.load(sys.stdin)
-    users = data.get("users", [])
-    for user in users:
-        print(f"{user.get(\"id\", \"\")}|||{user.get(\"email\", \"\")}|||{user.get(\"first_name\", \"\")} {user.get(\"last_name\", \"\")}")
-except:
-    pass
-' 2>/dev/null)
+    # Using jq to parse JSON if available, otherwise use grep/sed
+    if command -v jq >/dev/null 2>&1; then
+        # Use jq to extract user data
+        page_users=$(echo "$USERS_RESPONSE" | jq -r '.users[] | "\(.id)|||:\(.email)|||:\(.first_name) \(.last_name)"' 2>/dev/null)
 
         # Add users from this page to arrays
         while IFS='|||' read -r uid email name; do
@@ -167,7 +157,7 @@ except:
         done <<< "$page_users"
 
         # Check if there are more pages
-        page_count=$(echo "$USERS_RESPONSE" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("page_count", 0))' 2>/dev/null || echo "0")
+        page_count=$(echo "$USERS_RESPONSE" | jq -r '.page_count // 0' 2>/dev/null)
 
         if [[ $page_number -ge $page_count ]]; then
             has_more_pages=false
@@ -176,7 +166,7 @@ except:
         fi
     else
         # Fallback: just show the raw response and exit
-        log "WARNING: python3 not found. Showing raw API response:"
+        log "WARNING: jq not found. Showing raw API response:"
         echo "$USERS_RESPONSE" | grep -o '"users":\[.*\]' || echo "$USERS_RESPONSE"
         has_more_pages=false
     fi
