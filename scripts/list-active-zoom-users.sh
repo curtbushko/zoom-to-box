@@ -173,12 +173,18 @@ while [[ "$has_more_pages" == "true" ]]; do
 done
 
 log "Found ${#user_ids[@]} active users"
-echo ""
-echo "=========================================="
-echo "Active Users and Recording Counts"
-echo "=========================================="
-printf "%-40s %-40s %s\n" "Email" "Name" "Recordings (last 30 days)"
-echo "=========================================="
+
+# Output file
+OUTPUT_FILE="active_users.txt"
+
+# Initialize output file with header
+{
+    echo "=========================================="
+    echo "Active Users and Recording Counts"
+    echo "=========================================="
+    printf "%-40s %-40s %s\n" "Email" "Name" "Recordings (last 30 days)"
+    echo "=========================================="
+} | tee "$OUTPUT_FILE"
 
 # Get recording count for each user
 for i in "${!user_ids[@]}"; do
@@ -189,9 +195,9 @@ for i in "${!user_ids[@]}"; do
     log "Fetching recording count for: $user_email"
     recording_count=$(get_recording_count "$user_id" "$user_email")
 
-    # Print user info and recording count
-    printf "%-40s %-40s %s\n" "$user_email" "$user_name" "$recording_count"
+    # Print user info and recording count (both to stdout and file)
+    printf "%-40s %-40s %s\n" "$user_email" "$user_name" "$recording_count" | tee -a "$OUTPUT_FILE"
 done
 
-echo "=========================================="
-log "Done!"
+echo "==========================================" | tee -a "$OUTPUT_FILE"
+log "Done! Results saved to $OUTPUT_FILE"
